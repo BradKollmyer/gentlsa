@@ -14,7 +14,7 @@ import ssl
 import dns.resolver
 import smtplib
 import hashlib
-import M2Crypto
+import M2Crypto.X509
 
 try:
     import CloudFlare
