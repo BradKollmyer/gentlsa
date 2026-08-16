@@ -22,7 +22,7 @@ package_bin() {
     cp "$bin" "target/${triple}/release/gentlsa"
     chmod 755 target/release/gentlsa "target/${triple}/release/gentlsa"
 
-    cargo generate-rpm --auto-req disabled \
+    cargo generate-rpm --auto-req disabled --arch "$rpm_arch" \
         -o "$rpm_out/gentlsa-${version}-1.${rpm_arch}.rpm"
     cp "$rpm_out/gentlsa-${version}-1.${rpm_arch}.rpm" "$rpm_out/gentlsa.${rpm_arch}.rpm"
     echo "wrote $rpm_out/gentlsa-${version}-1.${rpm_arch}.rpm"
