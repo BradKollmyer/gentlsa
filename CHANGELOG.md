@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3 - 2026-08-16
+
+- Fix RPM architecture so `gentlsa.x86_64.rpm` is actually x86_64, not aarch64
+
 ## 0.3.2 - 2026-08-16
 
 - Ship Ubuntu/Debian `.deb` packages (`apt install`) for amd64 and arm64

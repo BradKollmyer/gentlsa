@@ -30,7 +30,7 @@ sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/downloa
 sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
 ```
 
-Or download the versioned file (`gentlsa-0.3.2-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
+Or download the versioned file (`gentlsa-0.3.3-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
 
 Ubuntu / Debian (installs `/usr/bin/gentlsa`):
 
@@ -204,8 +204,8 @@ Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag
 
 ```
 # bump version in Cargo.toml and CHANGELOG.md
-git commit -am "release: 0.3.2"
-git tag v0.3.2
+git commit -am "release: 0.3.3"
+git tag v0.3.3
 git push && git push --tags
 ```
 
