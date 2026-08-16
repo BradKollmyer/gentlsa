@@ -20,6 +20,18 @@ Homebrew:
 brew install BradKollmyer/tap/gentlsa
 ```
 
+Fedora / RHEL (installs `/usr/bin/gentlsa`):
+
+```
+# x86_64
+sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.x86_64.rpm
+
+# aarch64
+sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
+```
+
+Or download the versioned file (`gentlsa-0.3.1-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
+
 Windows (PowerShell):
 
 ```
@@ -166,6 +178,12 @@ The token needs Zone read and DNS edit on the zones you publish to.
 ```
 cargo test
 cargo clippy --all-targets -- -D warnings
+```
+
+To build a local RPM from the current checkout (`cargo-generate-rpm` required):
+
+```
+./scripts/build-rpms.sh
 ```
 
 Fixture certificate used by the hash tests: `tests/fixtures/test.example.pem`.

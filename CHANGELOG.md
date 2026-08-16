@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 - 2026-08-16
+
+- Ship Fedora/RHEL RPMs (`dnf install`) for x86_64 and aarch64
+
 ## 0.3.0 - 2026-08-16
 
 - Rewrite gentlsa as a Rust CLI (`generate`, `verify`, `file`, `cloudflare`)

@@ -1,0 +1,56 @@
+name: Build RPMs
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  rpm:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      PLAN: ${{ inputs.plan }}
+      CARGO_TERM_COLOR: always
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Fetch release archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: dist-artifacts
+          merge-multiple: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-generate-rpm
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate-rpm
+
+      - name: Build RPMs
+        run: bash scripts/build-rpms.sh --from-artifacts dist-artifacts
+
+      - name: Upload RPMs
+        uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-rpm
+          path: target/generate-rpm/*.rpm
+
+      - name: Attach RPMs to the GitHub Release
+        if: ${{ !github.event.pull_request }}
+        run: |
+          tag="$(printf '%s' "$PLAN" | jq -r '.announcement_tag // empty')"
+          if [[ -z "$tag" || "$tag" == "null" ]]; then
+            echo "no announcement tag; skipping release upload"
+            exit 0
+          fi
+          gh release upload "$tag" target/generate-rpm/*.rpm --clobber --repo "${{ github.repository }}"
