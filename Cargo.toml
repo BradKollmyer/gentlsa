@@ -1,10 +1,12 @@
 [package]
 name = "gentlsa"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Simple tool for dealing with DANE/TLSA records"
 license = "BSD-2-Clause"
 readme = "README.md"
+homepage = "https://github.com/BradKollmyer/gentlsa"
+repository = "https://github.com/BradKollmyer/gentlsa"
 keywords = ["dane", "tlsa", "dns", "tls", "cloudflare"]
 categories = ["command-line-utilities", "network-programming"]
 
@@ -23,3 +25,8 @@ serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 x509-parser = "0.18"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

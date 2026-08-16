@@ -2,22 +2,44 @@
 
 CLI for DANE/TLSA records. It prints `TLSA 3 1 1` (DANE-EE, SubjectPublicKeyInfo, SHA-256) from a live TLS certificate or a local PEM/DER file, optionally publishes that record to Cloudflare, and can verify DNS against the certificate the server presents.
 
-Requires a recent stable Rust toolchain (edition 2024).
+Requires a recent stable Rust toolchain (edition 2024) only if you build from source.
 
 ## Install
 
-From this repository:
+Prebuilt binaries for macOS, Linux, and Windows are published on each [GitHub Release](https://github.com/BradKollmyer/gentlsa/releases).
+
+macOS and Linux:
+
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa-installer.sh | sh
+```
+
+Homebrew:
+
+```
+brew install BradKollmyer/tap/gentlsa
+```
+
+Windows (PowerShell):
+
+```
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa-installer.ps1 | iex"
+```
+
+From source (this repository):
 
 ```
 cargo install --path .
 ```
 
-Or build a local binary:
+Or:
 
 ```
 cargo build --release
 ./target/release/gentlsa --help
 ```
+
+`cargo binstall gentlsa` also works once a GitHub Release exists.
 
 ## Usage
 
@@ -147,6 +169,15 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 Fixture certificate used by the hash tests: `tests/fixtures/test.example.pem`.
+
+Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag. [dist](https://github.com/axodotdev/cargo-dist) then builds binaries and installers and publishes the Homebrew formula to [BradKollmyer/homebrew-tap](https://github.com/BradKollmyer/homebrew-tap):
+
+```
+# bump version in Cargo.toml and CHANGELOG.md
+git commit -am "release: 0.3.1"
+git tag v0.3.1
+git push && git push --tags
+```
 
 ## License
 
