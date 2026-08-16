@@ -1,5 +1,2 @@
-- Apply TLSA to cloudflare zones
-  -  Check if TLSA exists, check if valid. Update when needed
-- Verify TLSA record
-- Check TLSA cert expiry
-- List/Check CloudFlare zones
+- Check TLSA certificate expiry (warn / Nagios exit when the live cert is near expiry)
+- Make more configurable and suitable to run from cron(1)

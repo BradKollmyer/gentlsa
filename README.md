@@ -1,92 +1,153 @@
 # GenTLSA
 
-Simple tool for dealing with DANE/TSLA records. Also displays info for certificates. Also has optional CloudFlare support.
+CLI for DANE/TLSA records. It prints `TLSA 3 1 1` (DANE-EE, SubjectPublicKeyInfo, SHA-256) from a live TLS certificate or a local PEM/DER file, optionally publishes that record to Cloudflare, and can verify DNS against the certificate the server presents.
 
-**NOTE:** This script does **NOT** work with python 2. You shouldn't be using python 2 anyway.
+Requires a recent stable Rust toolchain (edition 2024).
+
+## Install
+
+From this repository:
+
+```
+cargo install --path .
+```
+
+Or build a local binary:
+
+```
+cargo build --release
+./target/release/gentlsa --help
+```
 
 ## Usage
-```
-./gentlsa.py
-
-Usage:
-    gentlsa.py generate <zone> <port> [--hostname <shorthost>] [--info] [--cloudflare] [--dryrun]
-    gentlsa.py verify <name> <port> [--hostname <shorthost>]
-    gentlsa.py cloudflare [--info] [--listzones]
-    gentlsa.py file <certfile>
-```
-
-### Example output:
-
-Generating TLSA entry:
 
 ```
-┌─[ekollof@elrond]─(~/Code/gentlsa)(master U:2 ?:1 ✗)
-└─[15:39]-(%)-[$] ./gentlsa.py generate coolvibe.org 443
-_443._tcp TLSA 3 1 1 8adbc769e05014c8e0b431770f97e1f09659c5a6eae9f5683701bc6f071d8a94
+gentlsa generate <ZONE> <PORT> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--dryrun]
+gentlsa verify <ZONE> <PORT> [--hostname <HOSTNAME>] [--info]
+gentlsa cloudflare [--info] [--listzones]
+gentlsa file <CERTFILE> [--hostname <HOSTNAME>] [--port <PORT>]
 ```
-Display cert info:
+
+`--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
+
+### generate
+
+Fetch the live certificate and print a zone-file style TLSA record:
+
 ```
-┌─[ekollof@elrond]─(~/Code/gentlsa)(master S:4 U:3 ?:1 ✗)
-└─[15:47]-(%)-[$] ./gentlsa.py generate coolvibe.org 443 --info
+$ gentlsa generate example.com 443
+_443._tcp TLSA 3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
+```
+
+`--info` adds leaf-certificate details:
+
+```
+$ gentlsa generate example.com 443 --info
 >>> Certificate Information:
-Serial : 4906ded898ec441cbbc223acb960a95239a
-Issuer : C=US, O=Let's Encrypt, CN=Let's Encrypt Authority X3
-Subject: CN=coolvibe.org
-Subject Alternative Name(s): DNS:coolvibe.org
-Certificate Inception:  2018-08-26 09:00:32+00:00 UTC
-Certificate Expiration: 2018-11-24 09:00:32+00:00 UTC
-_443._tcp TLSA 3 1 1 8adbc769e05014c8e0b431770f97e1f09659c5a6eae9f5683701bc6f071d8a94
-
-```
-Update Cloudflare entry (will create an entry if not present). Will only return the TLSA record and report if Cloudflare
-registration worked. This is an example which uses STARTTLS to get the certificate.
-```
-┌─[ekollof@elrond]─(~/Code/gentlsa)(master U:1 ?:1 ✗)
-└─[15:43]-(%)-[$] ./gentlsa.py generate hackerheaven.org 25 --hostname mx --cloudflare --info  
->>> Certificate Information:
-Serial : 4c44f405bf6ea521edd60e9ad9806df051a
-Issuer : C=US, O=Let's Encrypt, CN=Let's Encrypt Authority X3
-Subject: CN=mx.hackerheaven.org
-Subject Alternative Name(s): DNS:mx.hackerheaven.org
-Certificate Inception:  2018-09-01 03:16:37+00:00 UTC
-Certificate Expiration: 2018-11-30 03:16:37+00:00 UTC
-_25._tcp.mx TLSA 3 1 1 e4a76ab909941a470314f4a4fcc9338623dd619ab9f5ac715a08fe9b94417d8c
->>> Cloudflare Information:
-Zone name: hackerheaven.org
-Zone ID: REDACTED
-Zone owner: REDACTED
-Name servers: ['isla.ns.cloudflare.com', 'jake.ns.cloudflare.com']
-Cloudflare: TLSA record updated for hackerheaven.org
+Serial : 624d0ab311558780b7d5213b9631831
+Issuer : C=US, O=SSL Corporation, CN=Cloudflare TLS Issuing ECC CA 3
+Subject: CN=example.com
+Subject Alternative Name(s): DNS:example.com, DNS:*.example.com
+Certificate Inception:  2026-07-29 22:10:08+00:00 UTC
+Certificate Expiration: 2026-10-27 22:17:21+00:00 UTC
+_443._tcp TLSA 3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
 ```
 
-Verify a TLSA record (Nagios compatible, returns 0 on success, 2 on failure). This compares what's in DNS and what your servers seem to report:
+SMTP STARTTLS example (connects to `smtp.gmail.com:587`):
+
 ```
-┌─[ekollof@elrond]─(~/Code/gentlsa)(master U:1 ?:1 ✗)
-└─[15:43]-(%)-[$] ./gentlsa.py verify hackerheaven.org 443
+$ gentlsa generate gmail.com 587 --hostname smtp --info
+```
+
+`--cloudflare` creates or updates the matching TLSA record in Cloudflare. `--dryrun` shows the action without writing.
+
+```
+$ gentlsa generate example.com 443 --cloudflare --info
+$ gentlsa generate example.com 25 --hostname mx --cloudflare --dryrun
+```
+
+### verify
+
+Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate (Nagios-compatible):
+
+| Exit | Output | Meaning |
+|------|--------|---------|
+| 0 | `OK - TLSA is valid` | At least one DNS TLSA hash matches the live SPKI SHA-256 |
+| 2 | `ERROR - TLSA invalid: ...` | DNS has TLSA records, none match |
+| 3 | `UNKNOWN - Something went wrong. Check logs` | Lookup or connection failed |
+
+```
+$ gentlsa verify www.freebsd.org 443
 OK - TLSA is valid
 ```
 
-## Cloudflare support
+`--info` prints the live certificate before the OK/ERROR/UNKNOWN line.
 
-Create a file in your home directory with the path: `~/.cloudflare/cloudflare.cfg`
+### file
 
-Add the following info in it (it's available on the bottom on your account profile page):
+Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name:
+
+```
+$ gentlsa file /etc/ssl/certs/example.pem --port 443
+>>> Certificate Information:
+Serial : ...
+Issuer : ...
+Subject: ...
+Certificate Inception:  ...
+Certificate Expiration: ...
+_443._tcp TLSA 3 1 1 ...
+```
+
+### cloudflare
+
+```
+$ gentlsa cloudflare --listzones
+>>> Cloudflare Zones:
+<zone-id>  example.com
+
+$ gentlsa cloudflare --info
+>>> Cloudflare Information:
+Auth: API token
+```
+
+`--listzones` is implied when `--info` is omitted.
+
+## Cloudflare credentials
+
+Create `~/.cloudflare/cloudflare.cfg`. A scoped API token (no email) is preferred:
 
 ```
 [CloudFlare]
-email = <cloudflare login (e-mail)>
-token = <token>
-certtoken = <certtoken>
-
+token = <api token>
 ```
 
-You can also use environment variables. See here: [https://github.com/cloudflare/python-cloudflare]
+`api_token` is accepted as an alias for `token`. A global API key still works if both email and token are set:
 
-## TODO:
+```
+[CloudFlare]
+email = <cloudflare login>
+token = <global API key>
+```
 
-* Check if DANE/TLSA is valid
-* Make more configurable and suitable to run from cron(1)
+Environment variables override the config file:
 
- 
+| Variable | Use |
+|----------|-----|
+| `CF_API_TOKEN` or `CLOUDFLARE_API_TOKEN` | Bearer API token |
+| `CF_API_EMAIL` + `CF_API_KEY` | Global API key |
+| `CLOUDFLARE_EMAIL` + `CLOUDFLARE_API_KEY` | Same as above |
 
+The token needs Zone read and DNS edit on the zones you publish to.
 
+## Development
+
+```
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
+Fixture certificate used by the hash tests: `tests/fixtures/test.example.pem`.
+
+## License
+
+BSD-2-Clause. See [LICENSE](LICENSE).
