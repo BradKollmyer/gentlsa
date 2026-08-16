@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 - 2026-08-16
+
+- Ship Ubuntu/Debian `.deb` packages (`apt install`) for amd64 and arm64
+
 ## 0.3.1 - 2026-08-16
 
 - Ship Fedora/RHEL RPMs (`dnf install`) for x86_64 and aarch64

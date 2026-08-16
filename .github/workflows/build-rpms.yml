@@ -1,4 +1,4 @@
-name: Build RPMs
+name: Build RPMs and debs
 
 on:
   workflow_call:
@@ -31,21 +31,23 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-generate-rpm
+      - name: Install packagers
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-generate-rpm
+          tool: cargo-generate-rpm,cargo-deb
 
-      - name: Build RPMs
+      - name: Build RPMs and debs
         run: bash scripts/build-rpms.sh --from-artifacts dist-artifacts
 
-      - name: Upload RPMs
+      - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
-          name: artifacts-rpm
-          path: target/generate-rpm/*.rpm
+          name: artifacts-linux-packages
+          path: |
+            target/generate-rpm/*.rpm
+            target/debian/*.deb
 
-      - name: Attach RPMs to the GitHub Release
+      - name: Attach packages to the GitHub Release
         if: ${{ !github.event.pull_request }}
         run: |
           tag="$(printf '%s' "$PLAN" | jq -r '.announcement_tag // empty')"
@@ -53,4 +55,7 @@ jobs:
             echo "no announcement tag; skipping release upload"
             exit 0
           fi
-          gh release upload "$tag" target/generate-rpm/*.rpm --clobber --repo "${{ github.repository }}"
+          gh release upload "$tag" \
+            target/generate-rpm/*.rpm \
+            target/debian/*.deb \
+            --clobber --repo "${{ github.repository }}"

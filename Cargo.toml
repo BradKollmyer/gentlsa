@@ -1,6 +1,6 @@
 [package]
 name = "gentlsa"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "Simple tool for dealing with DANE/TLSA records"
 license = "BSD-2-Clause"
@@ -33,6 +33,18 @@ assets = [
     { source = "target/release/gentlsa", dest = "/usr/bin/gentlsa", mode = "755" },
     { source = "LICENSE", dest = "/usr/share/licenses/gentlsa/LICENSE", mode = "644", doc = true },
     { source = "README.md", dest = "/usr/share/doc/gentlsa/README.md", mode = "644", doc = true },
+]
+
+[package.metadata.deb]
+maintainer = "Brad Kollmyer <https://github.com/BradKollmyer>"
+copyright = "2018 Emiel Kollof and contributors"
+section = "utils"
+priority = "optional"
+depends = "libc6"
+assets = [
+    ["target/release/gentlsa", "usr/bin/", "755"],
+    ["LICENSE", "usr/share/doc/gentlsa/LICENSE", "644"],
+    ["README.md", "usr/share/doc/gentlsa/README.md", "644"],
 ]
 
 # The profile that 'dist' will build with

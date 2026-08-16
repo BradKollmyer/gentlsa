@@ -30,7 +30,19 @@ sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/downloa
 sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
 ```
 
-Or download the versioned file (`gentlsa-0.3.1-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
+Or download the versioned file (`gentlsa-0.3.2-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
+
+Ubuntu / Debian (installs `/usr/bin/gentlsa`):
+
+```
+# amd64
+curl -fsSL -O https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.amd64.deb
+sudo apt install ./gentlsa.amd64.deb
+
+# arm64
+curl -fsSL -O https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.arm64.deb
+sudo apt install ./gentlsa.arm64.deb
+```
 
 Windows (PowerShell):
 
@@ -180,7 +192,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-To build a local RPM from the current checkout (`cargo-generate-rpm` required):
+To build local RPM and deb packages (`cargo-generate-rpm` and `cargo-deb` required):
 
 ```
 ./scripts/build-rpms.sh
@@ -192,8 +204,8 @@ Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag
 
 ```
 # bump version in Cargo.toml and CHANGELOG.md
-git commit -am "release: 0.3.1"
-git tag v0.3.1
+git commit -am "release: 0.3.2"
+git tag v0.3.2
 git push && git push --tags
 ```
 
