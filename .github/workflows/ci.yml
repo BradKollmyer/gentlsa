@@ -62,6 +62,10 @@ jobs:
         if: runner.os != 'Windows'
         run: bash scripts/check-man.sh
 
+      - name: Check shell completions are up to date
+        if: runner.os != 'Windows'
+        run: bash scripts/gen-completions.sh --check
+
   freebsd:
     name: FreeBSD amd64
     runs-on: ubuntu-24.04
@@ -93,9 +97,13 @@ jobs:
             cargo test --release --locked
             cargo build --release --locked
             sh scripts/check-man.sh
+            sh scripts/gen-completions.sh --check target/release/gentlsa
             sh scripts/smoke-test.sh target/release/gentlsa
             sh scripts/build-pkg.sh --from-bin target/release/gentlsa
             pkg add target/freebsd/gentlsa.amd64.pkg
             sh scripts/smoke-test.sh /usr/local/bin/gentlsa
             test -f /usr/local/share/man/man1/gentlsa.1
             test -f /usr/local/share/man/man5/gentlsa.5
+            test -f /usr/local/share/bash-completion/completions/gentlsa
+            test -f /usr/local/share/zsh/site-functions/_gentlsa
+            test -f /usr/local/share/fish/vendor_completions.d/gentlsa.fish

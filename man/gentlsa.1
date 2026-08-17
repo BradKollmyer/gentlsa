@@ -107,13 +107,22 @@
 .Cm google
 .Op Fl -info
 .Op Fl -listzones
+.Nm
+.Cm completions
+.Ar shell
 .Sh DESCRIPTION
 .Nm
 prints, publishes, lists, prunes, and verifies DANE TLSA records.
-It always emits
+It emits
 .Sy TLSA 3 1 1
 .Pq DANE-EE, SubjectPublicKeyInfo, SHA-256
-from a live TLS certificate or a local PEM/DER file.
+from a live TLS certificate or a local PEM/DER file by default; see
+.Fl -usage , -selector ,
+and
+.Fl -matching
+under
+.Cm generate
+for other parameters.
 .Pp
 .Ar zone
 is the DNS zone
@@ -380,6 +389,17 @@ With a publisher flag, and with
 and
 .Fl -port ,
 publish that file's hash before reloading the service.
+.Ss completions
+Print a shell completion script for
+.Ar shell
+.Pq Sy bash , zsh , fish , powershell , No or Sy elvish
+on stdout.
+The RPM, deb, and FreeBSD packages install the bash, zsh, and fish
+scripts already; other install methods need it written to the right
+directory by hand.
+.Bd -literal -offset indent
+$ gentlsa completions fish > ~/.config/fish/completions/gentlsa.fish
+.Ed
 .Ss cloudflare , nsupdate , route53 , google
 Publisher helpers.
 .Fl -info
@@ -442,6 +462,13 @@ System rollover job directory
 .It Pa /usr/lib/systemd/system/gentlsa-resume.timer
 Retry interrupted rollovers one minute after boot, then every 10
 minutes.
+.It Pa /usr/share/bash-completion/completions/gentlsa
+Bash completions
+.Pq installed by the RPM and deb; Pa /usr/local/share/... No on Fx .
+.It Pa /usr/share/zsh/site-functions/_gentlsa
+Zsh completions.
+.It Pa /usr/share/fish/vendor_completions.d/gentlsa.fish
+Fish completions.
 .El
 .Pp
 See

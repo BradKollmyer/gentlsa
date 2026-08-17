@@ -217,6 +217,16 @@ async fn run() -> Result<u8> {
             }
             Ok(worst)
         }
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "gentlsa",
+                &mut std::io::stdout(),
+            );
+            Ok(0)
+        }
         Command::Cloudflare { info, listzones } => cloudflare_cmd(info, listzones).await,
         Command::Nsupdate { info } => nsupdate_cmd(info).await,
         Command::Route53 { info, listzones } => route53_cmd(info, listzones).await,

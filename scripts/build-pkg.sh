@@ -33,6 +33,9 @@ files = [
     ("/usr/local/bin/gentlsa", bin_path, 0o755),
     ("/usr/local/share/man/man1/gentlsa.1", os.path.join(root, "man/gentlsa.1"), 0o644),
     ("/usr/local/share/man/man5/gentlsa.5", os.path.join(root, "man/gentlsa.5"), 0o644),
+    ("/usr/local/share/bash-completion/completions/gentlsa", os.path.join(root, "contrib/completions/gentlsa.bash"), 0o644),
+    ("/usr/local/share/zsh/site-functions/_gentlsa", os.path.join(root, "contrib/completions/_gentlsa"), 0o644),
+    ("/usr/local/share/fish/vendor_completions.d/gentlsa.fish", os.path.join(root, "contrib/completions/gentlsa.fish"), 0o644),
     ("/usr/local/share/licenses/gentlsa/LICENSE", license_path, 0o644),
     ("/usr/local/share/doc/gentlsa/README.md", readme_path, 0o644),
 ]

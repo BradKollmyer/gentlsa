@@ -97,6 +97,7 @@ gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] nsupdate [--info]
 gentlsa [-v|--verbose] [--json] route53 [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] google [--info] [--listzones]
+gentlsa completions <bash|zsh|fish|powershell|elvish>
 gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google]
 ```
 
@@ -273,6 +274,31 @@ _443._tcp TLSA 3 1 1 ...
 ```
 $ gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --port 443 --cloudflare
 ```
+
+### completions
+
+Print a shell completion script on stdout:
+
+```
+$ gentlsa completions bash
+$ gentlsa completions zsh
+$ gentlsa completions fish
+```
+
+`powershell` and `elvish` also work. The RPM, deb, and FreeBSD packages install the bash, zsh, and fish scripts already — nothing to do there. For Homebrew, `cargo install`, or the curl/PowerShell installer, install one yourself:
+
+```
+# bash
+gentlsa completions bash | sudo tee /usr/share/bash-completion/completions/gentlsa >/dev/null
+
+# zsh (a directory on your $fpath)
+gentlsa completions zsh | sudo tee /usr/local/share/zsh/site-functions/_gentlsa >/dev/null
+
+# fish
+gentlsa completions fish > ~/.config/fish/completions/gentlsa.fish
+```
+
+The generated scripts are also checked in under `contrib/completions/`.
 
 ## Certificate renewal / key rollover
 

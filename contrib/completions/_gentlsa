@@ -1,0 +1,431 @@
+#compdef gentlsa
+
+autoload -U is-at-least
+
+_gentlsa() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_gentlsa_commands" \
+"*::: :->gentlsa" \
+&& ret=0
+    case $state in
+    (gentlsa)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:gentlsa-command-$line[1]:"
+        case $line[1] in
+            (generate)
+_arguments "${_arguments_options[@]}" : \
+'--hostname=[Short hostname, without the zone (for example "mx")]:HOSTNAME:_default' \
+'--usage=[TLSA certificate usage\: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE]:USAGE:_default' \
+'--selector=[TLSA selector\: 0 full certificate, 1 SubjectPublicKeyInfo]:SELECTOR:_default' \
+'--matching=[TLSA matching type\: 0 exact, 1 SHA2-256, 2 SHA2-512]:MATCHING:_default' \
+'--info[Print certificate details]' \
+'--cloudflare[Publish / list / prune via the Cloudflare API]' \
+'--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
+'--route53[Publish / list / prune via Amazon Route 53]' \
+'--google[Publish / list / prune via Google Cloud DNS]' \
+'--replace[With a publisher, overwrite the existing TLSA instead of adding a rollover record]' \
+'--dryrun[With a publisher, print the action but do not write records]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':zone:_default' \
+':ports -- Service port or comma-separated list (for example 443 or 25,465):_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--hostname=[]:HOSTNAME:_default' \
+'--cloudflare[Publish / list / prune via the Cloudflare API]' \
+'--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
+'--route53[Publish / list / prune via Amazon Route 53]' \
+'--google[Publish / list / prune via Google Cloud DNS]' \
+'--info[Compare listed hashes to the live certificate]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':zone:_default' \
+'::ports -- Service port or comma-separated list. Omit to include every port:_default' \
+&& ret=0
+;;
+(prune)
+_arguments "${_arguments_options[@]}" : \
+'--hostname=[]:HOSTNAME:_default' \
+'--cloudflare[Publish / list / prune via the Cloudflare API]' \
+'--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
+'--route53[Publish / list / prune via Amazon Route 53]' \
+'--google[Publish / list / prune via Google Cloud DNS]' \
+'--dryrun[]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':zone:_default' \
+':ports -- Service port or comma-separated list (for example 443 or 25,465):_default' \
+&& ret=0
+;;
+(rollover)
+_arguments "${_arguments_options[@]}" : \
+'--hostname=[Short hostname, without the zone (for example "mx")]:HOSTNAME:_default' \
+'--reload=[Command to run after 2× the TLSA TTL so the service presents the new certificate]:CMD:_default' \
+'--ttl=[TLSA TTL in seconds; waits 2× this before reload and again before prune (default\: 300 Cloudflare, 3600 otherwise)]:TTL:_default' \
+'()--resume=[Resume a pending rollover after a reboot (all jobs, or one job id / zone)]::JOB:_default' \
+'--info[Print certificate details]' \
+'--cloudflare[Publish / list / prune via the Cloudflare API]' \
+'--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
+'--route53[Publish / list / prune via Amazon Route 53]' \
+'--google[Publish / list / prune via Google Cloud DNS]' \
+'--dryrun[Print the sequence without writing records, sleeping, or running --reload]' \
+'(--resume)--schedule[Write the job and start gentlsa-rollover@JOB (does not block)]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::certfile -- Local PEM or DER of the new certificate (not yet served):_files' \
+'::zone:_default' \
+'::ports -- Service port or comma-separated list (for example 443 or 25,465):_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--hostname=[]:HOSTNAME:_default' \
+'--warn=[Warn when the live certificate expires in this many days or fewer]:DAYS:_default' \
+'--critical=[Critical when the live certificate expires in this many days or fewer]:DAYS:_default' \
+'--info[]' \
+'(--warn --critical)--no-expiry-check[Check the TLSA hash only, ignoring certificate expiry (pre-0.4.1 behavior)]' \
+'--no-dnssec-check[Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':zone:_default' \
+':ports -- Service port or comma-separated list (for example 443 or 25,465):_default' \
+&& ret=0
+;;
+(cloudflare)
+_arguments "${_arguments_options[@]}" : \
+'--info[Print Cloudflare authentication status]' \
+'--listzones[List zones available to the configured account]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(nsupdate)
+_arguments "${_arguments_options[@]}" : \
+'--info[Print nsupdate server and key (never the secret)]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(route53)
+_arguments "${_arguments_options[@]}" : \
+'--info[Print Route 53 authentication status]' \
+'--listzones[List hosted zones available to the configured account]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(google)
+_arguments "${_arguments_options[@]}" : \
+'--info[Print Google Cloud DNS authentication status]' \
+'--listzones[List managed zones in the configured project]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':shell -- Shell to generate completions for:(bash elvish fish powershell zsh)' \
+&& ret=0
+;;
+(file)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Zone to publish into when using a publisher flag]:ZONE:_default' \
+'--hostname=[]:HOSTNAME:_default' \
+'--port=[Service port or comma-separated list (for example 443 or 25,465)]:PORTS:_default' \
+'--usage=[TLSA certificate usage\: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE]:USAGE:_default' \
+'--selector=[TLSA selector\: 0 full certificate, 1 SubjectPublicKeyInfo]:SELECTOR:_default' \
+'--matching=[TLSA matching type\: 0 exact, 1 SHA2-256, 2 SHA2-512]:MATCHING:_default' \
+'--info[Print certificate details (on by default for this command)]' \
+'--cloudflare[Publish / list / prune via the Cloudflare API]' \
+'--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
+'--route53[Publish / list / prune via Amazon Route 53]' \
+'--google[Publish / list / prune via Google Cloud DNS]' \
+'--replace[]' \
+'--dryrun[]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':certfile:_files' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_gentlsa__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:gentlsa-help-command-$line[1]:"
+        case $line[1] in
+            (generate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(prune)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rollover)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(cloudflare)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(nsupdate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(route53)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(google)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(file)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_gentlsa_commands] )) ||
+_gentlsa_commands() {
+    local commands; commands=(
+'generate:Generate a TLSA record from a live certificate' \
+'list:List published TLSA records from DNS (and optionally a publisher)' \
+'prune:Remove stale TLSA records that no longer match the live certificate' \
+'rollover:Publish a new-cert hash, wait 2× the TLSA TTL, reload, wait, then prune' \
+'verify:Verify DNS TLSA against the live certificate (Nagios-compatible)' \
+'cloudflare:Cloudflare helpers' \
+'nsupdate:RFC 2136 / TSIG helpers' \
+'route53:Amazon Route 53 helpers' \
+'google:Google Cloud DNS helpers' \
+'completions:Show TLSA info for a local certificate file Print a shell completion script to stdout' \
+'file:Mutually exclusive publisher flags shared by generate/list/prune/file/rollover' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'gentlsa commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__cloudflare_commands] )) ||
+_gentlsa__subcmd__cloudflare_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa cloudflare commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__completions_commands] )) ||
+_gentlsa__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa completions commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__file_commands] )) ||
+_gentlsa__subcmd__file_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa file commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__generate_commands] )) ||
+_gentlsa__subcmd__generate_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa generate commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__google_commands] )) ||
+_gentlsa__subcmd__google_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa google commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help_commands] )) ||
+_gentlsa__subcmd__help_commands() {
+    local commands; commands=(
+'generate:Generate a TLSA record from a live certificate' \
+'list:List published TLSA records from DNS (and optionally a publisher)' \
+'prune:Remove stale TLSA records that no longer match the live certificate' \
+'rollover:Publish a new-cert hash, wait 2× the TLSA TTL, reload, wait, then prune' \
+'verify:Verify DNS TLSA against the live certificate (Nagios-compatible)' \
+'cloudflare:Cloudflare helpers' \
+'nsupdate:RFC 2136 / TSIG helpers' \
+'route53:Amazon Route 53 helpers' \
+'google:Google Cloud DNS helpers' \
+'completions:Show TLSA info for a local certificate file Print a shell completion script to stdout' \
+'file:Mutually exclusive publisher flags shared by generate/list/prune/file/rollover' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'gentlsa help commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__cloudflare_commands] )) ||
+_gentlsa__subcmd__help__subcmd__cloudflare_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help cloudflare commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__completions_commands] )) ||
+_gentlsa__subcmd__help__subcmd__completions_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help completions commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__file_commands] )) ||
+_gentlsa__subcmd__help__subcmd__file_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help file commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__generate_commands] )) ||
+_gentlsa__subcmd__help__subcmd__generate_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help generate commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__google_commands] )) ||
+_gentlsa__subcmd__help__subcmd__google_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help google commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__help_commands] )) ||
+_gentlsa__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help help commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__list_commands] )) ||
+_gentlsa__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help list commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__nsupdate_commands] )) ||
+_gentlsa__subcmd__help__subcmd__nsupdate_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help nsupdate commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__prune_commands] )) ||
+_gentlsa__subcmd__help__subcmd__prune_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help prune commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__rollover_commands] )) ||
+_gentlsa__subcmd__help__subcmd__rollover_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help rollover commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__route53_commands] )) ||
+_gentlsa__subcmd__help__subcmd__route53_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help route53 commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__verify_commands] )) ||
+_gentlsa__subcmd__help__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help verify commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__list_commands] )) ||
+_gentlsa__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa list commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__nsupdate_commands] )) ||
+_gentlsa__subcmd__nsupdate_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa nsupdate commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__prune_commands] )) ||
+_gentlsa__subcmd__prune_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa prune commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__rollover_commands] )) ||
+_gentlsa__subcmd__rollover_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa rollover commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__route53_commands] )) ||
+_gentlsa__subcmd__route53_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa route53 commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__verify_commands] )) ||
+_gentlsa__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa verify commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_gentlsa" ]; then
+    _gentlsa "$@"
+else
+    compdef _gentlsa gentlsa
+fi

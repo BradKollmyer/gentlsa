@@ -266,6 +266,12 @@ pub enum Command {
         listzones: bool,
     },
     /// Show TLSA info for a local certificate file
+    /// Print a shell completion script to stdout
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     File {
         certfile: PathBuf,
         /// Zone to publish into when using a publisher flag

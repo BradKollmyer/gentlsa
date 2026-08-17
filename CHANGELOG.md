@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `gentlsa completions <shell>` prints a bash, zsh, fish, PowerShell, or elvish completion script; the RPM, deb, and FreeBSD packages install the bash, zsh, and fish ones
 - `generate` and `file` accept `--usage`, `--selector`, and `--matching` to emit TLSA parameters other than 3 1 1 (DANE-TA 2 1 1, full-cert selector 0, SHA2-512, exact matching); with usage 0/2, `generate` hashes the first issuer certificate the server presents. Publishing stays 3 1 1-only and other parameters are rejected with a clear error
 - `verify` evaluates every DNS TLSA record with its own parameters against the presented chain (usage 1/3 against the leaf, 0/2 against any presented certificate, selectors 0/1, matching 0/1/2), so zones publishing only DANE-TA `2 1 1` no longer report a false ERROR
 - `verify` validates the TLSA records with DNSSEC (locally, from the root trust anchor): an unauthenticated RRset is WARNING — DANE clients ignore TLSA records they cannot authenticate — and a bogus RRset is CRITICAL; `--no-dnssec-check` restores the pre-0.5.0 behavior, and `--json` reports the verdict in `dnssec`
