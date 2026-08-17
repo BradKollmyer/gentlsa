@@ -10,6 +10,7 @@ mod publish;
 mod report;
 mod rollover;
 mod route53;
+mod timeout;
 mod tlsa;
 mod verbose;
 
@@ -54,6 +55,8 @@ async fn run() -> Result<u8> {
     let cli = Cli::parse();
     verbose::init(cli.verbose);
     output::init(cli.json);
+    timeout::init(cli.timeout);
+    verbose::step(format_args!("timeout {}s", cli.timeout));
 
     match cli.command {
         Command::Generate {

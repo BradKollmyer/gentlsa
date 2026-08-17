@@ -37,6 +37,10 @@ hash="ff94ad7dfafffed26e98150947dd8b1a7d981fabf90740c574685c81d487b9a8"
     echo "expected generate --help to mention --starttls" >&2
     exit 1
 }
+"$bin" verify --help | grep -q -- '--timeout' || {
+    echo "expected verify --help to mention --timeout" >&2
+    exit 1
+}
 for shell in bash zsh fish; do
     "$bin" completions "$shell" | grep -q gentlsa || {
         echo "expected $shell completions to mention gentlsa" >&2

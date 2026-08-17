@@ -203,6 +203,15 @@ remains Nagios-safe.
 Print one JSON object on standard output instead of text.
 .Fl -verbose
 can still be combined; steps stay on standard error.
+.It Fl -timeout Ar seconds
+Overall deadline for hostname resolution, TCP connect, STARTTLS,
+the TLS handshake, and DNS
+.Pq including DNSSEC .
+Default 30.
+A timed-out
+.Cm verify
+exits UNKNOWN.
+Set this below the Nagios service check timeout.
 .El
 .Sh COMMANDS
 .Ss generate

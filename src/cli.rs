@@ -133,6 +133,16 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Overall deadline in seconds for connect, I/O, and DNS (default 30)
+    #[arg(
+        long,
+        global = true,
+        default_value_t = crate::timeout::DEFAULT_SECS,
+        value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..=3600)
+    )]
+    pub timeout: u64,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -567,6 +577,31 @@ mod tests {
         let off = Cli::try_parse_from(["gentlsa", "list", "example.com"]).unwrap();
         assert!(!off.verbose);
         assert!(!off.json);
+        assert_eq!(off.timeout, crate::timeout::DEFAULT_SECS);
+    }
+
+    #[test]
+    fn clap_global_timeout() {
+        let cli =
+            Cli::try_parse_from(["gentlsa", "--timeout", "10", "verify", "example.com", "443"])
+                .unwrap();
+        assert_eq!(cli.timeout, 10);
+
+        let after = Cli::try_parse_from([
+            "gentlsa",
+            "generate",
+            "example.com",
+            "443",
+            "--timeout",
+            "5",
+        ])
+        .unwrap();
+        assert_eq!(after.timeout, 5);
+
+        assert!(Cli::try_parse_from(["gentlsa", "--timeout", "0", "list", "example.com"]).is_err());
+        assert!(
+            Cli::try_parse_from(["gentlsa", "--timeout", "3601", "list", "example.com"]).is_err()
+        );
     }
 
     #[test]

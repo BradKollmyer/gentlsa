@@ -1,8 +1,9 @@
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::mpsc;
+use std::thread;
 
 use anyhow::{Context, Result, bail};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -17,12 +18,11 @@ use x509_parser::prelude::FromDer;
 use x509_parser::time::ASN1Time;
 
 use crate::dns::TlsaRecord;
+use crate::timeout;
 use crate::tlsa::{self, StarttlsProto, TlsaParams, owner_name};
 use crate::verbose;
 
 use serde::Serialize;
-
-const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CertDetails {
@@ -234,6 +234,7 @@ fn tlsa_association_data(der: &[u8], selector: u8, matching: u8) -> Result<Strin
 }
 
 pub fn fetch_live(host: &str, port: u16, starttls: Option<StarttlsProto>) -> Result<Certificate> {
+    let _ = timeout::remaining()?;
     let proto = StarttlsProto::resolve(port, starttls);
     verbose::step(format_args!(
         "connecting to {host}:{port} ({})",
@@ -262,13 +263,57 @@ pub fn install_crypto_provider() -> Result<()> {
 }
 
 fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
-    let stream = TcpStream::connect((host, port))
-        .with_context(|| format!("failed to connect to {host}:{port}"))?;
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    stream.set_nodelay(true)?;
-    verbose::step(format_args!("TCP connected to {host}:{port}"));
-    Ok(stream)
+    let addrs = resolve_timeout(host, port)?;
+    if addrs.is_empty() {
+        bail!("no addresses for {host}:{port}");
+    }
+    let mut last_err = None;
+    for addr in addrs {
+        let budget = timeout::remaining()?;
+        match TcpStream::connect_timeout(&addr, budget) {
+            Ok(stream) => {
+                apply_io_timeout(&stream)?;
+                stream.set_nodelay(true)?;
+                verbose::step(format_args!("TCP connected to {host}:{port} ({addr})"));
+                return Ok(stream);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(timeout::expired_error())
+                    .with_context(|| format!("failed to connect to {host}:{port}"));
+            }
+            Err(err) => last_err = Some(err),
+        }
+    }
+    match last_err {
+        Some(err) => Err(err).with_context(|| format!("failed to connect to {host}:{port}")),
+        None => bail!("failed to connect to {host}:{port}"),
+    }
+}
+
+fn resolve_timeout(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
+    let budget = timeout::remaining()?;
+    let target = (host.to_string(), port);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(
+            (target.0.as_str(), target.1)
+                .to_socket_addrs()
+                .map(|addrs| addrs.collect()),
+        );
+    });
+    match rx.recv_timeout(budget) {
+        Ok(Ok(addrs)) => Ok(addrs),
+        Ok(Err(err)) => Err(err).with_context(|| format!("failed to resolve {host}:{port}")),
+        Err(_) => Err(timeout::expired_error())
+            .with_context(|| format!("failed to resolve {host}:{port}")),
+    }
+}
+
+fn apply_io_timeout(stream: &TcpStream) -> Result<()> {
+    let budget = timeout::remaining()?;
+    stream.set_read_timeout(Some(budget))?;
+    stream.set_write_timeout(Some(budget))?;
+    Ok(())
 }
 
 fn smtp_starttls(host: &str, port: u16) -> Result<TcpStream> {
@@ -516,6 +561,7 @@ fn read_until_markers(stream: &mut impl Read, markers: &[&str], proto: &str) -> 
 }
 
 fn tls_peer_cert(mut stream: TcpStream, server_name: &str) -> Result<Certificate> {
+    apply_io_timeout(&stream)?;
     let name = ServerName::try_from(server_name.to_string())
         .map_err(|err| anyhow::anyhow!("invalid server name {server_name}: {err}"))?;
     let mut conn = ClientConnection::new(Arc::new(client_config()?), name)
@@ -895,6 +941,18 @@ mod tests {
         );
         let err = xmpp_negotiate(&mut stream, "example.com", 5222).unwrap_err();
         assert!(err.to_string().contains("did not advertise STARTTLS"));
+    }
+
+    #[test]
+    fn connect_timeout_fails_fast() {
+        let start = std::time::Instant::now();
+        let err = TcpStream::connect_timeout(
+            &"192.0.2.1:443".parse().unwrap(),
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(start.elapsed() < std::time::Duration::from_secs(3));
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
     }
 
     #[test]

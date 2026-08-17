@@ -1,13 +1,15 @@
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use hickory_resolver::Resolver;
 use hickory_resolver::proto::dnssec::Proof;
 use hickory_resolver::proto::dnssec::rdata::DNSSECRData;
 use hickory_resolver::proto::rr::rdata::TLSA;
 use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::{Resolver, TokioResolver};
 
+use crate::timeout;
 use crate::verbose;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -35,12 +37,9 @@ impl std::fmt::Display for TlsaRecord {
 
 pub async fn lookup_tlsa(name: &str) -> Result<Vec<TlsaRecord>> {
     verbose::step(format_args!("DNS TLSA lookup {name}"));
-    let resolver = Resolver::builder_tokio()
-        .context("failed to load system resolver config")?
-        .build()
-        .context("failed to build DNS resolver")?;
+    let resolver = build_resolver(false)?;
 
-    let lookup = match resolver.tlsa_lookup(name).await {
+    let lookup = match dns_timeout(resolver.tlsa_lookup(name)).await? {
         Ok(lookup) => lookup,
         Err(err) => {
             verbose::step(format_args!("DNS lookup failed: {err}"));
@@ -115,11 +114,9 @@ pub struct TlsaLookup {
 /// Like [`lookup_tlsa`], but validates the response with DNSSEC and reports the verdict.
 pub async fn lookup_tlsa_dnssec(name: &str) -> Result<TlsaLookup> {
     verbose::step(format_args!("DNS TLSA lookup {name} (DNSSEC validation)"));
-    let mut builder = Resolver::builder_tokio().context("failed to load system resolver config")?;
-    builder.options_mut().validate = true;
-    let resolver = builder.build().context("failed to build DNS resolver")?;
+    let resolver = build_resolver(true)?;
 
-    let lookup = match resolver.tlsa_lookup(name).await {
+    let lookup = match dns_timeout(resolver.tlsa_lookup(name)).await? {
         Ok(lookup) => lookup,
         Err(err) => {
             verbose::step(format_args!("DNS lookup failed: {err}"));
@@ -159,15 +156,20 @@ pub async fn warn_if_unsigned(zone: &str) {
         return;
     }
     verbose::step(format_args!("DNS DS lookup {name}"));
-    let resolver = match Resolver::builder_tokio().and_then(|builder| builder.build()) {
+    if timeout::remaining().is_err() {
+        verbose::step("DS lookup skipped: timed out");
+        return;
+    }
+    let resolver = match build_resolver(false) {
         Ok(resolver) => resolver,
         Err(err) => {
             verbose::step(format_args!("DS lookup skipped: {err}"));
             return;
         }
     };
-    match resolver.lookup(format!("{name}."), RecordType::DS).await {
-        Ok(lookup) => {
+    match dns_timeout(resolver.lookup(format!("{name}."), RecordType::DS)).await {
+        Err(err) => verbose::step(format_args!("DS lookup skipped: {err}")),
+        Ok(Ok(lookup)) => {
             let count = lookup
                 .answers()
                 .iter()
@@ -179,8 +181,32 @@ pub async fn warn_if_unsigned(zone: &str) {
                 warn_no_ds(&name);
             }
         }
-        Err(err) if err.is_no_records_found() => warn_no_ds(&name),
-        Err(err) => verbose::step(format_args!("DS lookup failed: {err}")),
+        Ok(Err(err)) if err.is_no_records_found() => warn_no_ds(&name),
+        Ok(Err(err)) => verbose::step(format_args!("DS lookup failed: {err}")),
+    }
+}
+
+fn build_resolver(validate: bool) -> Result<TokioResolver> {
+    let mut builder = Resolver::builder_tokio().context("failed to load system resolver config")?;
+    if validate {
+        builder.options_mut().validate = true;
+    }
+    if let Ok(left) = timeout::remaining() {
+        let opts = builder.options_mut();
+        opts.timeout = left;
+        opts.attempts = 1;
+    }
+    builder.build().context("failed to build DNS resolver")
+}
+
+async fn dns_timeout<T, E, F>(fut: F) -> Result<std::result::Result<T, E>>
+where
+    F: Future<Output = std::result::Result<T, E>>,
+{
+    let left = timeout::remaining()?;
+    match tokio::time::timeout(left, fut).await {
+        Ok(inner) => Ok(inner),
+        Err(_) => Err(timeout::expired_error()),
     }
 }
 

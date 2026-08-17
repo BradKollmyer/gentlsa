@@ -15,6 +15,7 @@ _gentlsa() {
 
     local context curcontext="$curcontext" state line
     _arguments "${_arguments_options[@]}" : \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '-v[Print each processing step to stderr]' \
 '--verbose[Print each processing step to stderr]' \
 '--json[Emit a single JSON object on stdout instead of text]' \
@@ -42,6 +43,7 @@ none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 '--usage=[TLSA certificate usage\: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE]:USAGE:_default' \
 '--selector=[TLSA selector\: 0 full certificate, 1 SubjectPublicKeyInfo]:SELECTOR:_default' \
 '--matching=[TLSA matching type\: 0 exact, 1 SHA2-256, 2 SHA2-512]:MATCHING:_default' \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print certificate details]' \
 '--cloudflare[Publish / list / prune via the Cloudflare API]' \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
@@ -67,6 +69,7 @@ imap\:""
 pop3\:""
 xmpp\:""
 none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--cloudflare[Publish / list / prune via the Cloudflare API]' \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
@@ -90,6 +93,7 @@ imap\:""
 pop3\:""
 xmpp\:""
 none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--cloudflare[Publish / list / prune via the Cloudflare API]' \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
@@ -116,6 +120,7 @@ none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 '--reload=[Command to run after 2× the TLSA TTL so the service presents the new certificate]:CMD:_default' \
 '--ttl=[TLSA TTL in seconds; waits 2× this before reload and again before prune (default\: 300 Cloudflare, 3600 otherwise)]:TTL:_default' \
 '()--resume=[Resume a pending rollover after a reboot (all jobs, or one job id / zone)]::JOB:_default' \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print certificate details]' \
 '--cloudflare[Publish / list / prune via the Cloudflare API]' \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
@@ -144,6 +149,7 @@ xmpp\:""
 none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 '--warn=[Warn when the live certificate expires in this many days or fewer]:DAYS:_default' \
 '--critical=[Critical when the live certificate expires in this many days or fewer]:DAYS:_default' \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[]' \
 '(--warn --critical)--no-expiry-check[Check the TLSA hash only, ignoring certificate expiry (pre-0.4.1 behavior)]' \
 '--no-dnssec-check[Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)]' \
@@ -158,6 +164,7 @@ none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 ;;
 (cloudflare)
 _arguments "${_arguments_options[@]}" : \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print Cloudflare authentication status]' \
 '--listzones[List zones available to the configured account]' \
 '-v[Print each processing step to stderr]' \
@@ -169,6 +176,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (nsupdate)
 _arguments "${_arguments_options[@]}" : \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print nsupdate server and key (never the secret)]' \
 '-v[Print each processing step to stderr]' \
 '--verbose[Print each processing step to stderr]' \
@@ -179,6 +187,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (route53)
 _arguments "${_arguments_options[@]}" : \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print Route 53 authentication status]' \
 '--listzones[List hosted zones available to the configured account]' \
 '-v[Print each processing step to stderr]' \
@@ -190,6 +199,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (google)
 _arguments "${_arguments_options[@]}" : \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print Google Cloud DNS authentication status]' \
 '--listzones[List managed zones in the configured project]' \
 '-v[Print each processing step to stderr]' \
@@ -201,6 +211,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (azure)
 _arguments "${_arguments_options[@]}" : \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print Azure DNS authentication status]' \
 '--listzones[List DNS zones available to the configured subscription]' \
 '-v[Print each processing step to stderr]' \
@@ -212,6 +223,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (completions)
 _arguments "${_arguments_options[@]}" : \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '-v[Print each processing step to stderr]' \
 '--verbose[Print each processing step to stderr]' \
 '--json[Emit a single JSON object on stdout instead of text]' \
@@ -228,6 +240,7 @@ _arguments "${_arguments_options[@]}" : \
 '--usage=[TLSA certificate usage\: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE]:USAGE:_default' \
 '--selector=[TLSA selector\: 0 full certificate, 1 SubjectPublicKeyInfo]:SELECTOR:_default' \
 '--matching=[TLSA matching type\: 0 exact, 1 SHA2-256, 2 SHA2-512]:MATCHING:_default' \
+'--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
 '--info[Print certificate details (on by default for this command)]' \
 '--cloudflare[Publish / list / prune via the Cloudflare API]' \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \

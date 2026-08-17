@@ -87,19 +87,19 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google|--azure] [--replace] [--dryrun]
-gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--info]
-gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--dryrun]
-gentlsa [-v|--verbose] [--json] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
-gentlsa [-v|--verbose] [--json] rollover --resume [JOB]
-gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--warn <DAYS>] [--critical <DAYS>] [--no-expiry-check] [--no-dnssec-check]
-gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
-gentlsa [-v|--verbose] [--json] nsupdate [--info]
-gentlsa [-v|--verbose] [--json] route53 [--info] [--listzones]
-gentlsa [-v|--verbose] [--json] google [--info] [--listzones]
-gentlsa [-v|--verbose] [--json] azure [--info] [--listzones]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google|--azure] [--replace] [--dryrun]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--info]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--dryrun]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] rollover --resume [JOB]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--warn <DAYS>] [--critical <DAYS>] [--no-expiry-check] [--no-dnssec-check]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] cloudflare [--info] [--listzones]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] nsupdate [--info]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] route53 [--info] [--listzones]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] google [--info] [--listzones]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] azure [--info] [--listzones]
 gentlsa completions <bash|zsh|fish|powershell|elvish>
-gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google|--azure]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google|--azure]
 ```
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). `--starttls smtp|imap|pop3|xmpp|none` selects the plaintext upgrade before TLS. When omitted, ports **25** and **587** use SMTP, **143** IMAP, **110** POP3, and **5222**/**5269** XMPP. Every other port, including 443, 465, 993, and 995, uses implicit TLS. `--starttls none` forces implicit TLS on a STARTTLS port; `--starttls smtp` (or `imap`/`pop3`/`xmpp`) forces that protocol on a nonstandard port. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
@@ -107,6 +107,8 @@ gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOS
 `-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, publisher APIs). Regular output stays on stdout, so `verify` remains Nagios-safe.
 
 `--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `1` / `2` / `3`) and puts the result in `status` (`ok` / `warning` / `critical` / `error` / `unknown`), `message`, and `exit`.
+
+`--timeout <SECONDS>` (default 30) is an overall deadline for hostname resolution, TCP connect, STARTTLS, the TLS handshake, and DNS (including DNSSEC). A timed-out `verify` exits UNKNOWN. Set this below the Nagios service check timeout (for example `--timeout 10` when the check is 15s).
 
 ```
 $ gentlsa generate example.com 443 -v

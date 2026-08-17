@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_gentlsa_global_optspecs
-    string join \n v/verbose json h/help V/version
+    string join \n v/verbose json timeout= h/help V/version
 end
 
 function __fish_gentlsa_needs_command
@@ -24,6 +24,7 @@ function __fish_gentlsa_using_subcommand
     contains -- $cmd[1] $argv
 end
 
+complete -c gentlsa -n "__fish_gentlsa_needs_command" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -s h -l help -d 'Print help'
@@ -50,6 +51,7 @@ none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l usage -d 'TLSA certificate usage: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l selector -d 'TLSA selector: 0 full certificate, 1 SubjectPublicKeyInfo' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l matching -d 'TLSA matching type: 0 exact, 1 SHA2-256, 2 SHA2-512' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l info -d 'Print certificate details'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
@@ -67,6 +69,7 @@ imap\t''
 pop3\t''
 xmpp\t''
 none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l route53 -d 'Publish / list / prune via Amazon Route 53'
@@ -82,6 +85,7 @@ imap\t''
 pop3\t''
 xmpp\t''
 none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l route53 -d 'Publish / list / prune via Amazon Route 53'
@@ -100,6 +104,7 @@ none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l reload -d 'Command to run after 2× the TLSA TTL so the service presents the new certificate' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l ttl -d 'TLSA TTL in seconds; waits 2× this before reload and again before prune (default: 300 Cloudflare, 3600 otherwise)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l resume -d 'Resume a pending rollover after a reboot (all jobs, or one job id / zone)' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l info -d 'Print certificate details'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
@@ -119,36 +124,43 @@ xmpp\t''
 none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l warn -d 'Warn when the live certificate expires in this many days or fewer' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l critical -d 'Critical when the live certificate expires in this many days or fewer' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l info
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l no-expiry-check -d 'Check the TLSA hash only, ignoring certificate expiry (pre-0.4.1 behavior)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l no-dnssec-check -d 'Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -l info -d 'Print Cloudflare authentication status'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -l listzones -d 'List zones available to the configured account'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand nsupdate" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand nsupdate" -l info -d 'Print nsupdate server and key (never the secret)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand nsupdate" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand nsupdate" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand nsupdate" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand route53" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand route53" -l info -d 'Print Route 53 authentication status'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand route53" -l listzones -d 'List hosted zones available to the configured account'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand route53" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand route53" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand route53" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand google" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand google" -l info -d 'Print Google Cloud DNS authentication status'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand google" -l listzones -d 'List managed zones in the configured project'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand google" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand google" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand google" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand azure" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand azure" -l info -d 'Print Azure DNS authentication status'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand azure" -l listzones -d 'List DNS zones available to the configured subscription'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand azure" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand azure" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand azure" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand completions" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand completions" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand completions" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand completions" -s h -l help -d 'Print help'
@@ -158,6 +170,7 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l port -d 'Servic
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l usage -d 'TLSA certificate usage: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l selector -d 'TLSA selector: 0 full certificate, 1 SubjectPublicKeyInfo' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l matching -d 'TLSA matching type: 0 exact, 1 SHA2-256, 2 SHA2-512' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l info -d 'Print certificate details (on by default for this command)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
