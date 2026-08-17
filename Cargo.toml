@@ -37,7 +37,7 @@ assets = [
 
 [package.metadata.deb]
 maintainer = "Brad Kollmyer <https://github.com/BradKollmyer>"
-copyright = "2018 Emiel Kollof and contributors"
+copyright = "2018 Emiel Kollof, 2026 Brad Kollmyer"
 section = "utils"
 priority = "optional"
 depends = "libc6"

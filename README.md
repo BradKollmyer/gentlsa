@@ -2,6 +2,8 @@
 
 CLI for DANE/TLSA records. It prints `TLSA 3 1 1` (DANE-EE, SubjectPublicKeyInfo, SHA-256) from a live TLS certificate or a local PEM/DER file, optionally publishes that record to Cloudflare, and can verify DNS against the certificate the server presents.
 
+Rust port of [Emiel Kollof’s gentlsa](https://github.com/ekollof/gentlsa), with additional features.
+
 Requires a recent stable Rust toolchain (edition 2024) only if you build from source.
 
 ## Install
@@ -317,4 +319,4 @@ git push && git push --tags
 
 ## License
 
-BSD-2-Clause. See [LICENSE](LICENSE).
+BSD-2-Clause. Copyright (c) 2018 Emiel Kollof; Copyright (c) 2026 Brad Kollmyer. See [LICENSE](LICENSE).
