@@ -104,6 +104,8 @@ gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] file <CERTFILE> [--zone <Z
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). `--starttls smtp|imap|pop3|xmpp|none` selects the plaintext upgrade before TLS. When omitted, ports **25** and **587** use SMTP, **143** IMAP, **110** POP3, and **5222**/**5269** XMPP. Every other port, including 443, 465, 993, and 995, uses implicit TLS. `--starttls none` forces implicit TLS on a STARTTLS port; `--starttls smtp` (or `imap`/`pop3`/`xmpp`) forces that protocol on a nonstandard port. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
 
+SMTP `EHLO` sends the connection's own source address as an RFC 5321 §4.1.3 address literal (`EHLO [192.0.2.10]`), which is what the RFC asks for when the client has no resolvable name. Behind NAT this is the private address; that is still valid syntax and is accepted by hardened servers such as Postfix with `reject_non_fqdn_helo_hostname`.
+
 `-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, publisher APIs). Regular output stays on stdout, so `verify` remains Nagios-safe.
 
 `--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `1` / `2` / `3`) and puts the result in `status` (`ok` / `warning` / `critical` / `error` / `unknown`), `message`, and `exit`.

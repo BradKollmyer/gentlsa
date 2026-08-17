@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -318,22 +318,39 @@ fn apply_io_timeout(stream: &TcpStream) -> Result<()> {
 
 fn smtp_starttls(host: &str, port: u16) -> Result<TcpStream> {
     let mut stream = tcp_connect(host, port)?;
-    smtp_negotiate(&mut stream)?;
+    let local = stream
+        .local_addr()
+        .context("failed to read the local socket address")?;
+    smtp_negotiate(&mut stream, &ehlo_name(local.ip()))?;
     Ok(stream)
 }
 
-fn smtp_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
+/// RFC 5321 §4.1.1.1 requires the EHLO argument to be a fully-qualified domain
+/// name, or an address literal (§4.1.3) when the client has no resolvable name.
+/// A bare label is rejected outright by hardened servers — Postfix with
+/// `reject_non_fqdn_helo_hostname` answers `504 need fully-qualified hostname`.
+/// The connection's own source address is always available and always valid,
+/// so use that rather than guessing at a local hostname that may not be a FQDN.
+fn ehlo_name(ip: IpAddr) -> String {
+    // An IPv4-mapped IPv6 source renders as a plain IPv4 literal.
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => format!("[{ip}]"),
+        IpAddr::V6(ip) => format!("[IPv6:{ip}]"),
+    }
+}
+
+fn smtp_negotiate(stream: &mut impl ReadWrite, ehlo: &str) -> Result<()> {
     let (code, text) = smtp_read_response(stream)?;
     if code != 220 {
         bail!("SMTP banner rejected ({code}): {text}");
     }
     verbose::step(format_args!("SMTP banner {code}"));
 
-    let (code, text) = smtp_command(stream, "EHLO gentlsa")?;
+    let (code, text) = smtp_command(stream, &format!("EHLO {ehlo}"))?;
     if code != 250 {
         bail!("EHLO rejected ({code}): {text}");
     }
-    verbose::step("SMTP EHLO accepted");
+    verbose::step(format_args!("SMTP EHLO {ehlo} accepted"));
 
     let (code, text) = smtp_command(stream, "STARTTLS")?;
     if code != 220 {
@@ -836,17 +853,34 @@ mod tests {
     fn smtp_negotiate_ehlo_and_starttls() {
         let mut stream =
             Scripted::new("220 mx.example ESMTP\r\n250-hello\r\n250 STARTTLS\r\n220 Go ahead\r\n");
-        smtp_negotiate(&mut stream).unwrap();
+        smtp_negotiate(&mut stream, "[192.0.2.10]").unwrap();
         let written = stream.written();
-        assert!(written.contains("EHLO gentlsa"));
+        assert!(written.contains("EHLO [192.0.2.10]\r\n"));
         assert!(written.contains("STARTTLS"));
+    }
+
+    /// RFC 5321 §4.1.1.1: a bare label like "gentlsa" is rejected by Postfix
+    /// with `reject_non_fqdn_helo_hostname`, so the EHLO argument must be a
+    /// FQDN or an address literal (§4.1.3).
+    #[test]
+    fn ehlo_name_is_an_address_literal() {
+        assert_eq!(ehlo_name("192.0.2.10".parse().unwrap()), "[192.0.2.10]");
+        assert_eq!(
+            ehlo_name("2001:db8::1".parse().unwrap()),
+            "[IPv6:2001:db8::1]"
+        );
+        // An IPv4-mapped IPv6 source is emitted as a plain IPv4 literal.
+        assert_eq!(
+            ehlo_name("::ffff:192.0.2.10".parse().unwrap()),
+            "[192.0.2.10]"
+        );
     }
 
     #[test]
     fn smtp_negotiate_rejects_starttls() {
         let mut stream =
             Scripted::new("220 mx.example ESMTP\r\n250 ok\r\n454 TLS not available\r\n");
-        let err = smtp_negotiate(&mut stream).unwrap_err();
+        let err = smtp_negotiate(&mut stream, "[192.0.2.10]").unwrap_err();
         assert!(err.to_string().contains("STARTTLS rejected"));
     }
 

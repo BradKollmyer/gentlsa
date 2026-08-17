@@ -267,6 +267,11 @@ STARTTLS protocol
 or
 .Sy none .
 Default is inferred from the port.
+SMTP
+.Sy EHLO
+sends the connection's own source address as an RFC 5321
+.Sx 4.1.3
+address literal.
 .It Fl -info
 Print leaf-certificate details before the record.
 .It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google , Fl -azure
