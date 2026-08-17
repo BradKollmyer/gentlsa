@@ -1,2 +1,2 @@
 - Check TLSA certificate expiry (warn / Nagios exit when the live cert is near expiry)
-- Make more configurable and suitable to run from cron(1)
+- Optional wait/TTL helper for the rollover gap between publish and prune

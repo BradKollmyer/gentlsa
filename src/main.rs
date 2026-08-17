@@ -38,8 +38,34 @@ async fn run() -> Result<u8> {
             hostname,
             info,
             cloudflare,
+            replace,
             dryrun,
-        } => generate(&zone, port, hostname.as_deref(), info, cloudflare, dryrun).await,
+        } => {
+            generate(
+                &zone,
+                port,
+                hostname.as_deref(),
+                info,
+                cloudflare,
+                replace,
+                dryrun,
+            )
+            .await
+        }
+        Command::List {
+            zone,
+            port,
+            hostname,
+            cloudflare,
+            info,
+        } => list(&zone, port, hostname.as_deref(), cloudflare, info).await,
+        Command::Prune {
+            zone,
+            port,
+            hostname,
+            cloudflare,
+            dryrun,
+        } => prune(&zone, port, hostname.as_deref(), cloudflare, dryrun).await,
         Command::Verify {
             zone,
             port,
@@ -49,12 +75,32 @@ async fn run() -> Result<u8> {
         Command::Cloudflare { info, listzones } => cloudflare_cmd(info, listzones).await,
         Command::File {
             certfile,
+            zone,
             hostname,
             port,
             info,
+            cloudflare,
+            replace,
+            dryrun,
         } => {
             let cert = Certificate::from_file(&certfile)?;
             cert.print_info(hostname.as_deref(), port, info)?;
+            if cloudflare {
+                let zone = zone
+                    .as_deref()
+                    .context("--zone is required with --cloudflare")?;
+                let port = port.context("--port is required with --cloudflare")?;
+                return update_cloudflare(
+                    zone,
+                    hostname.as_deref(),
+                    port,
+                    &cert,
+                    info,
+                    replace,
+                    dryrun,
+                )
+                .await;
+            }
             Ok(0)
         }
     }
@@ -66,6 +112,7 @@ async fn generate(
     hostname: Option<&str>,
     info: bool,
     use_cloudflare: bool,
+    replace: bool,
     dryrun: bool,
 ) -> Result<u8> {
     let host = connect_host(zone, hostname);
@@ -73,7 +120,123 @@ async fn generate(
     cert.print_info(hostname, Some(port), info)?;
 
     if use_cloudflare {
-        return update_cloudflare(zone, hostname, port, &cert, info, dryrun).await;
+        return update_cloudflare(zone, hostname, port, &cert, info, replace, dryrun).await;
+    }
+    Ok(0)
+}
+
+fn hash_tag(live_hash: Option<&str>, record_hash: &str) -> &'static str {
+    match live_hash {
+        Some(live) if tlsa::hashes_equal(live, record_hash) => " (current)",
+        Some(_) => " (stale)",
+        None => "",
+    }
+}
+
+async fn live_hash(zone: &str, port: u16, hostname: Option<&str>) -> Option<String> {
+    let host = connect_host(zone, hostname);
+    let cert = fetch_live(&host, port).ok()?;
+    cert.spki_sha256_hex().ok()
+}
+
+async fn list(
+    zone_name: &str,
+    port: u16,
+    hostname: Option<&str>,
+    use_cloudflare: bool,
+    info: bool,
+) -> Result<u8> {
+    let name = fqdn(zone_name, port, hostname);
+    let live = if info {
+        live_hash(zone_name, port, hostname).await
+    } else {
+        None
+    };
+    if let Some(hash) = &live {
+        println!("Live TLSA 3 1 1 {hash}");
+    }
+
+    println!(">>> DNS {name}");
+    match dns::lookup_tlsa(&name).await {
+        Ok(records) if records.is_empty() => println!("(none)"),
+        Ok(records) => {
+            for record in records {
+                println!(
+                    "{}{}",
+                    record,
+                    hash_tag(live.as_deref(), &record.certificate)
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("{err:#}");
+            println!("(lookup failed)");
+        }
+    }
+
+    if use_cloudflare {
+        let cf = Cloudflare::from_env_or_config()
+            .context("Please install/configure Cloudflare credentials for this to work.")?;
+        let Some(zone) = cf.zone_by_name(zone_name).await? else {
+            println!("Not managed by cloudflare. Bailing.");
+            return Ok(1);
+        };
+        println!(">>> Cloudflare {}", zone.name);
+        let records = cf.list_tlsa(&zone, hostname, port).await?;
+        if records.is_empty() {
+            println!("(none)");
+        } else {
+            for record in records {
+                println!(
+                    "{}  {}  {}{}",
+                    record.id,
+                    record.name,
+                    record.to_text(),
+                    hash_tag(live.as_deref(), &record.certificate)
+                );
+            }
+        }
+    }
+    Ok(0)
+}
+
+async fn prune(
+    zone_name: &str,
+    port: u16,
+    hostname: Option<&str>,
+    use_cloudflare: bool,
+    dryrun: bool,
+) -> Result<u8> {
+    let host = connect_host(zone_name, hostname);
+    let cert = fetch_live(&host, port)?;
+    let live_hash = cert.spki_sha256_hex()?;
+    println!("Live TLSA 3 1 1 {live_hash}");
+
+    let name = fqdn(zone_name, port, hostname);
+    match dns::lookup_tlsa(&name).await {
+        Ok(records) if records.is_empty() => println!("DNS: no TLSA records for {name}"),
+        Ok(records) => {
+            for record in &records {
+                let stale = !tlsa::hashes_equal(&live_hash, &record.certificate);
+                println!(
+                    "DNS: {} {}",
+                    record,
+                    if stale { "(stale)" } else { "(current)" }
+                );
+            }
+        }
+        Err(err) => eprintln!("{err:#}"),
+    }
+
+    if use_cloudflare {
+        let cf = Cloudflare::from_env_or_config()
+            .context("Please install/configure Cloudflare credentials for this to work.")?;
+        let Some(zone) = cf.zone_by_name(zone_name).await? else {
+            println!("Not managed by cloudflare. Bailing.");
+            return Ok(1);
+        };
+        cf.prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
+            .await?;
     }
     Ok(0)
 }
@@ -142,6 +305,7 @@ async fn update_cloudflare(
     port: u16,
     cert: &Certificate,
     info: bool,
+    replace: bool,
     dryrun: bool,
 ) -> Result<u8> {
     let cf = Cloudflare::from_env_or_config()
@@ -154,7 +318,13 @@ async fn update_cloudflare(
         cf.print_zone_info(&zone);
     }
     let hash = cert.spki_sha256_hex()?;
-    cf.upsert_tlsa(&zone, hostname, port, &hash, dryrun).await?;
+    let mode = if replace {
+        cloudflare::PublishMode::Replace
+    } else {
+        cloudflare::PublishMode::Rollover
+    };
+    cf.publish_tlsa(&zone, hostname, port, &hash, mode, dryrun)
+        .await?;
     Ok(0)
 }
 

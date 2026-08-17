@@ -52,12 +52,41 @@ pub struct ZoneAccount {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct DnsRecord {
     id: String,
     name: String,
     #[serde(rename = "type")]
     record_type: String,
+    #[serde(default)]
+    data: Option<TlsaData>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListedTlsa {
+    pub id: String,
+    pub name: String,
+    pub usage: u8,
+    pub selector: u8,
+    pub matching: u8,
+    pub certificate: String,
+}
+
+impl ListedTlsa {
+    pub fn to_text(&self) -> String {
+        format!(
+            "{} {} {} {}",
+            self.usage, self.selector, self.matching, self.certificate
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishMode {
+    /// Add the live hash if it is missing; keep any existing hashes.
+    Rollover,
+    /// Overwrite the first matching 3 1 1 record (legacy behavior).
+    Replace,
 }
 
 #[derive(Debug, Serialize)]
@@ -69,7 +98,7 @@ struct TlsaPayload {
     data: TlsaData,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TlsaData {
     usage: u8,
     selector: u8,
@@ -121,67 +150,106 @@ impl Client {
         Ok(zones.into_iter().next())
     }
 
-    pub async fn upsert_tlsa(
+    pub async fn list_tlsa(
+        &self,
+        zone: &Zone,
+        hostname: Option<&str>,
+        port: u16,
+    ) -> Result<Vec<ListedTlsa>> {
+        let expected = expected_names(zone, hostname, port);
+        let records = self.tlsa_records(zone).await?;
+        Ok(records
+            .into_iter()
+            .filter(|record| record.matches_owner(&expected))
+            .filter_map(|record| {
+                let data = record.data?;
+                Some(ListedTlsa {
+                    id: record.id,
+                    name: record.name,
+                    usage: data.usage,
+                    selector: data.selector,
+                    matching: data.matching_type,
+                    certificate: data.certificate,
+                })
+            })
+            .collect())
+    }
+
+    pub async fn publish_tlsa(
         &self,
         zone: &Zone,
         hostname: Option<&str>,
         port: u16,
         certificate: &str,
+        mode: PublishMode,
         dryrun: bool,
     ) -> Result<()> {
         let owner = tlsa::owner_name(port, hostname);
-        let payload = TlsaPayload {
-            name: owner.clone(),
-            record_type: "TLSA",
-            ttl: 1,
-            data: TlsaData {
-                usage: tlsa::USAGE,
-                selector: tlsa::SELECTOR,
-                matching_type: tlsa::MATCHING,
-                certificate: certificate.to_string(),
-            },
-        };
+        let expected = expected_names(zone, hostname, port);
+        let records = self.tlsa_records(zone).await?;
+        let ours: Vec<&DnsRecord> = records
+            .iter()
+            .filter(|record| record.matches_owner(&expected))
+            .collect();
 
-        if dryrun {
+        if ours
+            .iter()
+            .any(|record| record.hash_matches(certificate) && record.is_dane_ee_spki_sha256())
+        {
             println!(
-                "Cloudflare: dry run, would write {owner} TLSA for {}",
+                "Cloudflare: TLSA already published for {} ({owner})",
                 zone.name
             );
             return Ok(());
         }
 
-        let records: Vec<DnsRecord> = self
-            .get_result(&format!("/zones/{}/dns_records?type=TLSA", zone.id))
-            .await
-            .context("failed to list Cloudflare TLSA records")?;
+        let payload = tlsa_payload(&owner, certificate);
 
-        let expected_names = [
-            format!("_{port}._tcp.{}", zone.name),
-            match hostname {
-                Some(host) if !host.is_empty() => format!("_{port}._tcp.{host}.{}", zone.name),
-                _ => String::new(),
-            },
-        ];
-
-        if let Some(existing) = records.iter().find(|record| {
-            record.record_type == "TLSA"
-                && expected_names
+        match mode {
+            PublishMode::Replace => {
+                if let Some(existing) = ours
                     .iter()
-                    .any(|name| !name.is_empty() && name.eq_ignore_ascii_case(&record.name))
-        }) {
-            let _: DnsRecord = self
-                .put_result(
-                    &format!("/zones/{}/dns_records/{}", zone.id, existing.id),
-                    &payload,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "Something went screwy: {} - Error: update failed",
-                        zone.name
-                    )
-                })?;
-            println!("Cloudflare: TLSA record updated for {}", zone.name);
+                    .find(|record| record.is_dane_ee_spki_sha256())
+                    .copied()
+                {
+                    if dryrun {
+                        println!(
+                            "Cloudflare: dry run, would replace TLSA {} on {}",
+                            existing.id, zone.name
+                        );
+                        return Ok(());
+                    }
+                    let _: DnsRecord = self
+                        .put_result(
+                            &format!("/zones/{}/dns_records/{}", zone.id, existing.id),
+                            &payload,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "Something went screwy: {} - Error: update failed",
+                                zone.name
+                            )
+                        })?;
+                    println!("Cloudflare: TLSA record updated for {}", zone.name);
+                    return Ok(());
+                }
+            }
+            PublishMode::Rollover => {
+                if !ours.is_empty() {
+                    println!(
+                        "Cloudflare: keeping {} existing TLSA record(s) for rollover",
+                        ours.len()
+                    );
+                }
+            }
+        }
+
+        if dryrun {
+            println!(
+                "Cloudflare: dry run, would add {owner} TLSA for {}",
+                zone.name
+            );
             return Ok(());
         }
 
@@ -196,6 +264,59 @@ impl Client {
             })?;
         println!("Cloudflare: TLSA record added for {}", zone.name);
         Ok(())
+    }
+
+    pub async fn prune_tlsa(
+        &self,
+        zone: &Zone,
+        hostname: Option<&str>,
+        port: u16,
+        live_hash: &str,
+        dryrun: bool,
+    ) -> Result<usize> {
+        let expected = expected_names(zone, hostname, port);
+        let records = self.tlsa_records(zone).await?;
+        let stale: Vec<&DnsRecord> = records
+            .iter()
+            .filter(|record| {
+                record.matches_owner(&expected)
+                    && record.is_dane_ee_spki_sha256()
+                    && !record.hash_matches(live_hash)
+            })
+            .collect();
+
+        if stale.is_empty() {
+            println!("Cloudflare: no stale TLSA records for {}", zone.name);
+            return Ok(0);
+        }
+
+        for record in &stale {
+            let hash = record
+                .data
+                .as_ref()
+                .map(|data| data.certificate.as_str())
+                .unwrap_or("?");
+            if dryrun {
+                println!("Cloudflare: dry run, would delete stale TLSA {hash}");
+                continue;
+            }
+            self.delete(&format!("/zones/{}/dns_records/{}", zone.id, record.id))
+                .await
+                .with_context(|| {
+                    format!(
+                        "Something went screwy: {} - Error: delete failed",
+                        zone.name
+                    )
+                })?;
+            println!("Cloudflare: deleted stale TLSA {hash}");
+        }
+        Ok(stale.len())
+    }
+
+    async fn tlsa_records(&self, zone: &Zone) -> Result<Vec<DnsRecord>> {
+        self.get_result(&format!("/zones/{}/dns_records?type=TLSA", zone.id))
+            .await
+            .context("failed to list Cloudflare TLSA records")
     }
 
     pub fn print_zone_info(&self, zone: &Zone) {
@@ -244,6 +365,75 @@ impl Client {
             .await
             .with_context(|| format!("Cloudflare PUT {path} failed"))?;
         parse_response(response).await
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let response = self
+            .http
+            .delete(format!("{API_BASE}{path}"))
+            .send()
+            .await
+            .with_context(|| format!("Cloudflare DELETE {path} failed"))?;
+        let status = response.status();
+        let parsed: ApiResponse<serde_json::Value> = response
+            .json()
+            .await
+            .with_context(|| format!("Cloudflare returned a non-JSON response ({status})"))?;
+        if !parsed.success {
+            let messages = parsed
+                .errors
+                .into_iter()
+                .map(|err| err.message)
+                .collect::<Vec<_>>()
+                .join("; ");
+            bail!("Cloudflare API error ({status}): {messages}");
+        }
+        Ok(())
+    }
+}
+
+fn expected_names(zone: &Zone, hostname: Option<&str>, port: u16) -> Vec<String> {
+    let mut names = vec![format!("_{port}._tcp.{}", zone.name)];
+    if let Some(host) = hostname.filter(|host| !host.is_empty()) {
+        names.push(format!("_{port}._tcp.{host}.{}", zone.name));
+    }
+    names
+}
+
+fn tlsa_payload(owner: &str, certificate: &str) -> TlsaPayload {
+    TlsaPayload {
+        name: owner.to_string(),
+        record_type: "TLSA",
+        ttl: 1,
+        data: TlsaData {
+            usage: tlsa::USAGE,
+            selector: tlsa::SELECTOR,
+            matching_type: tlsa::MATCHING,
+            certificate: certificate.to_string(),
+        },
+    }
+}
+
+impl DnsRecord {
+    fn matches_owner(&self, expected: &[String]) -> bool {
+        self.record_type == "TLSA"
+            && expected
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&self.name))
+    }
+
+    fn is_dane_ee_spki_sha256(&self) -> bool {
+        self.data.as_ref().is_some_and(|data| {
+            data.usage == tlsa::USAGE
+                && data.selector == tlsa::SELECTOR
+                && data.matching_type == tlsa::MATCHING
+        })
+    }
+
+    fn hash_matches(&self, live: &str) -> bool {
+        self.data
+            .as_ref()
+            .is_some_and(|data| tlsa::hashes_equal(live, &data.certificate))
     }
 }
 
@@ -366,4 +556,40 @@ fn first_env(keys: &[&str]) -> Result<String> {
         }
     }
     bail!("none of {} set", keys.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(name: &str, hash: &str) -> DnsRecord {
+        DnsRecord {
+            id: "id".into(),
+            name: name.into(),
+            record_type: "TLSA".into(),
+            data: Some(TlsaData {
+                usage: 3,
+                selector: 1,
+                matching_type: 1,
+                certificate: hash.into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn owner_and_hash_matching() {
+        let zone = Zone {
+            id: "z".into(),
+            name: "example.org".into(),
+            name_servers: vec![],
+            owner: None,
+            account: None,
+        };
+        let names = expected_names(&zone, Some("mx"), 25);
+        let rec = record("_25._tcp.mx.example.org", "AA");
+        assert!(rec.matches_owner(&names));
+        assert!(rec.is_dane_ee_spki_sha256());
+        assert!(rec.hash_matches("aa"));
+        assert!(!rec.hash_matches("bb"));
+    }
 }

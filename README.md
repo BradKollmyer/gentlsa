@@ -44,6 +44,15 @@ curl -fsSL -O https://github.com/BradKollmyer/gentlsa/releases/latest/download/g
 sudo apt install ./gentlsa.arm64.deb
 ```
 
+FreeBSD (installs `/usr/local/bin/gentlsa`):
+
+```
+# amd64 (FreeBSD 14+)
+sudo pkg add https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.amd64.pkg
+```
+
+Or download the versioned file (`gentlsa-0.3.3.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package.
+
 Windows (PowerShell):
 
 ```
@@ -68,10 +77,12 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa generate <ZONE> <PORT> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--dryrun]
+gentlsa generate <ZONE> <PORT> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
+gentlsa list <ZONE> <PORT> [--hostname <HOSTNAME>] [--cloudflare] [--info]
+gentlsa prune <ZONE> <PORT> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
 gentlsa verify <ZONE> <PORT> [--hostname <HOSTNAME>] [--info]
 gentlsa cloudflare [--info] [--listzones]
-gentlsa file <CERTFILE> [--hostname <HOSTNAME>] [--port <PORT>]
+gentlsa file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORT>] [--cloudflare]
 ```
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
@@ -105,7 +116,7 @@ SMTP STARTTLS example (connects to `smtp.gmail.com:587`):
 $ gentlsa generate gmail.com 587 --hostname smtp --info
 ```
 
-`--cloudflare` creates or updates the matching TLSA record in Cloudflare. `--dryrun` shows the action without writing.
+`--cloudflare` publishes the live hash in Cloudflare. If a TLSA record already exists, the new hash is **added** and the old one is kept (DANE key rollover). Use `--replace` to overwrite instead. `--dryrun` shows the action without writing.
 
 ```
 $ gentlsa generate example.com 443 --cloudflare --info
@@ -129,9 +140,30 @@ OK - TLSA is valid
 
 `--info` prints the live certificate before the OK/ERROR/UNKNOWN line.
 
+### list
+
+Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--info` fetches the live certificate and marks each hash current or stale.
+
+```
+$ gentlsa list example.com 443
+>>> DNS _443._tcp.example.com.
+3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
+
+$ gentlsa list example.com 443 --cloudflare --info
+```
+
+### prune
+
+List (and optionally delete) TLSA records that no longer match the live certificate. Run this after a rollover has been live longer than the DNS TTL.
+
+```
+$ gentlsa prune example.com 443 --cloudflare --dryrun
+$ gentlsa prune example.com 443 --cloudflare
+```
+
 ### file
 
-Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name:
+Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name. With `--cloudflare --zone --port`, publish that file's hash before you reload the service:
 
 ```
 $ gentlsa file /etc/ssl/certs/example.pem --port 443
@@ -143,6 +175,32 @@ Certificate Inception:  ...
 Certificate Expiration: ...
 _443._tcp TLSA 3 1 1 ...
 ```
+
+```
+$ gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --port 443 --cloudflare
+```
+
+## Certificate renewal / key rollover
+
+`TLSA 3 1 1` hashes the leaf public key. A typical Let's Encrypt renewal mints a new key, so the hash changes. Replacing the DNS record at the same moment you reload the cert leaves a window where caches have one side of the pair and not the other.
+
+Safer sequence:
+
+1. Issue the new certificate, but do not reload the service yet.
+2. Publish the **new** hash next to the old one:
+   ```
+   gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --port 443 --cloudflare
+   ```
+3. Wait at least as long as the TLSA TTL (and any resolver cache).
+4. Reload the service so it presents the new certificate.
+5. After another TTL, drop the old hash:
+   ```
+   gentlsa prune example.com 443 --cloudflare
+   ```
+
+If the new cert is already live, `generate --cloudflare` still **adds** the live hash instead of overwriting. That does not fix clients that only cached the old record, but it avoids deleting a hash that some resolvers still expect.
+
+`--replace` restores the old one-record overwrite.
 
 ### cloudflare
 
@@ -196,6 +254,12 @@ To build local RPM and deb packages (`cargo-generate-rpm` and `cargo-deb` requir
 
 ```
 ./scripts/build-rpms.sh
+```
+
+To build a local FreeBSD `.pkg` (amd64). On macOS this cross-compiles inside an [Apple container](https://github.com/apple/container) (not Docker):
+
+```
+./scripts/build-pkg.sh
 ```
 
 Fixture certificate used by the hash tests: `tests/fixtures/test.example.pem`.
