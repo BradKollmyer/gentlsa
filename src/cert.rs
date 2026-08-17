@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
@@ -335,12 +335,64 @@ fn apply_io_timeout(stream: &TcpStream) -> Result<()> {
     Ok(())
 }
 
+/// A socket whose every read and write is re-armed to what is left of the
+/// budget, making `--timeout` a real deadline.
+///
+/// `set_read_timeout` is per-syscall, not cumulative, and the negotiation
+/// readers consume a byte at a time: a peer dribbling one byte just under the
+/// limit would otherwise hold the connection open for hours under `--timeout 30`.
+struct TimedStream<'a>(&'a TcpStream);
+
+impl TimedStream<'_> {
+    fn arm(&self) -> io::Result<()> {
+        let left = timeout::remaining()
+            .map_err(|err| io::Error::new(io::ErrorKind::TimedOut, err.to_string()))?;
+        self.0.set_read_timeout(Some(left))?;
+        self.0.set_write_timeout(Some(left))?;
+        Ok(())
+    }
+}
+
+impl TimedStream<'_> {
+    /// A socket read/write timeout surfaces as `WouldBlock` (EAGAIN) or
+    /// `TimedOut`. When the budget is what actually ran out, say so instead of
+    /// letting a bare "Resource temporarily unavailable" reach the user.
+    fn explain(&self, err: io::Error) -> io::Error {
+        if matches!(
+            err.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ) && let Err(expired) = timeout::remaining()
+        {
+            return io::Error::new(io::ErrorKind::TimedOut, expired.to_string());
+        }
+        err
+    }
+}
+
+impl Read for TimedStream<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm()?;
+        (&*self.0).read(buf).map_err(|err| self.explain(err))
+    }
+}
+
+impl Write for TimedStream<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm()?;
+        (&*self.0).write(buf).map_err(|err| self.explain(err))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&*self.0).flush()
+    }
+}
+
 fn smtp_starttls(host: &str, port: u16) -> Result<TcpStream> {
-    let mut stream = tcp_connect(host, port)?;
+    let stream = tcp_connect(host, port)?;
     let local = stream
         .local_addr()
         .context("failed to read the local socket address")?;
-    smtp_negotiate(&mut stream, &ehlo_name(local.ip()))?;
+    smtp_negotiate(&mut TimedStream(&stream), &ehlo_name(local.ip()))?;
     Ok(stream)
 }
 
@@ -385,9 +437,17 @@ fn smtp_command(stream: &mut impl ReadWrite, command: &str) -> Result<(u16, Stri
     smtp_read_response(stream)
 }
 
+/// Continuation lines (SMTP) and untagged responses (IMAP) are both unbounded
+/// on the wire; cap them so a hostile peer cannot grow the buffer without limit
+/// inside the time budget. Real servers send a handful.
+const MAX_RESPONSE_LINES: usize = 256;
+
 fn smtp_read_response(stream: &mut impl Read) -> Result<(u16, String)> {
     let mut messages = Vec::new();
     let code = loop {
+        if messages.len() > MAX_RESPONSE_LINES {
+            bail!("SMTP response had more than {MAX_RESPONSE_LINES} lines");
+        }
         let line = read_crlf_line(stream, "SMTP")?;
         if line.len() < 3 {
             bail!("short SMTP response: {line:?}");
@@ -407,8 +467,8 @@ fn smtp_read_response(stream: &mut impl Read) -> Result<(u16, String)> {
 }
 
 fn imap_starttls(host: &str, port: u16) -> Result<TcpStream> {
-    let mut stream = tcp_connect(host, port)?;
-    imap_negotiate(&mut stream)?;
+    let stream = tcp_connect(host, port)?;
+    imap_negotiate(&mut TimedStream(&stream))?;
     Ok(stream)
 }
 
@@ -425,7 +485,7 @@ fn imap_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
 
     stream.write_all(b"a001 STARTTLS\r\n")?;
     stream.flush()?;
-    loop {
+    for _ in 0..MAX_RESPONSE_LINES {
         let line = read_crlf_line(stream, "IMAP")?;
         let upper = line.to_ascii_uppercase();
         if let Some(rest) = upper.strip_prefix("A001 ") {
@@ -439,11 +499,12 @@ fn imap_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
             bail!("IMAP closed: {line}");
         }
     }
+    bail!("IMAP sent more than {MAX_RESPONSE_LINES} untagged responses without answering a001");
 }
 
 fn pop3_starttls(host: &str, port: u16) -> Result<TcpStream> {
-    let mut stream = tcp_connect(host, port)?;
-    pop3_negotiate(&mut stream)?;
+    let stream = tcp_connect(host, port)?;
+    pop3_negotiate(&mut TimedStream(&stream))?;
     Ok(stream)
 }
 
@@ -465,8 +526,8 @@ fn pop3_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
 }
 
 fn xmpp_starttls(host: &str, port: u16, domain: &str) -> Result<TcpStream> {
-    let mut stream = tcp_connect(host, port)?;
-    xmpp_negotiate(&mut stream, domain, port)?;
+    let stream = tcp_connect(host, port)?;
+    xmpp_negotiate(&mut TimedStream(&stream), domain, port)?;
     Ok(stream)
 }
 
@@ -599,7 +660,7 @@ fn read_until_markers(stream: &mut impl Read, markers: &[&str], proto: &str) -> 
     }
 }
 
-fn tls_peer_cert(mut stream: TcpStream, server_name: &str) -> Result<Certificate> {
+fn tls_peer_cert(stream: TcpStream, server_name: &str) -> Result<Certificate> {
     apply_io_timeout(&stream)?;
     let name = ServerName::try_from(server_name.to_string())
         .map_err(|err| anyhow::anyhow!("invalid server name {server_name}: {err}"))?;
@@ -607,8 +668,9 @@ fn tls_peer_cert(mut stream: TcpStream, server_name: &str) -> Result<Certificate
         .context("failed to create TLS client")?;
 
     verbose::step(format_args!("TLS handshake with {server_name}"));
+    let mut timed = TimedStream(&stream);
     while conn.is_handshaking() {
-        conn.complete_io(&mut stream)
+        conn.complete_io(&mut timed)
             .context("TLS handshake failed")?;
     }
 
@@ -895,6 +957,31 @@ mod tests {
         assert_eq!(
             ehlo_name("::ffff:192.0.2.10".parse().unwrap()),
             "[192.0.2.10]"
+        );
+    }
+
+    /// A peer can stream continuation lines forever; the budget bounds the
+    /// time, this bounds the memory.
+    #[test]
+    fn smtp_response_lines_are_capped() {
+        let flood: String = std::iter::repeat_n("250-x\r\n", MAX_RESPONSE_LINES + 10).collect();
+        let mut stream = Scripted::new(&format!("220 mx.example ESMTP\r\n{flood}"));
+        let err = smtp_negotiate(&mut stream, "[192.0.2.10]").unwrap_err();
+        assert!(
+            err.to_string().contains("more than"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn imap_untagged_responses_are_capped() {
+        let flood: String =
+            std::iter::repeat_n("* CAPABILITY x\r\n", MAX_RESPONSE_LINES + 10).collect();
+        let mut stream = Scripted::new(&format!("* OK ready\r\n{flood}"));
+        let err = imap_negotiate(&mut stream).unwrap_err();
+        assert!(
+            err.to_string().contains("more than"),
+            "unexpected error: {err}"
         );
     }
 
