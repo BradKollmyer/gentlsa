@@ -32,7 +32,7 @@ sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/downloa
 sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
 ```
 
-Or download the versioned file (`gentlsa-0.3.4-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
+Or download the versioned file (`gentlsa-0.3.5-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
 
 Ubuntu / Debian (installs `/usr/bin/gentlsa`):
 
@@ -53,7 +53,7 @@ FreeBSD (installs `/usr/local/bin/gentlsa`):
 sudo pkg add https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.amd64.pkg
 ```
 
-Or download the versioned file (`gentlsa-0.3.4.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package.
+Or download the versioned file (`gentlsa-0.3.5.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package.
 
 Windows (PowerShell):
 
@@ -422,8 +422,8 @@ Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag
 
 ```
 # bump version in Cargo.toml and CHANGELOG.md
-git commit -am "release: 0.3.4"
-git tag v0.3.4
+git commit -am "release: 0.3.5"
+git tag v0.3.5
 git push && git push --tags
 ```
 

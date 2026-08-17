@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 - 2026-08-17
 
 - `list` (and prune DNS lines) decode TLSA usage/selector/matching with RFC 7218 names
 - Publish, list, and prune TLSA records via RFC 2136 dynamic update (`--nsupdate`, TSIG)
