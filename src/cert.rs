@@ -10,13 +10,14 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{
     ClientConfig, ClientConnection, DigitallySignedStruct, Error as TlsError, SignatureScheme,
 };
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use x509_parser::certificate::X509Certificate;
 use x509_parser::extensions::GeneralName;
 use x509_parser::prelude::FromDer;
 use x509_parser::time::ASN1Time;
 
-use crate::tlsa::{self, owner_name};
+use crate::dns::TlsaRecord;
+use crate::tlsa::{self, TlsaParams, owner_name};
 use crate::verbose;
 
 use serde::Serialize;
@@ -44,12 +45,19 @@ pub struct CertLifetime {
 #[derive(Debug, Clone)]
 pub struct Certificate {
     der: Vec<u8>,
+    /// Issuer certificates presented alongside the leaf, in chain order.
+    /// Empty for certificates loaded from a file.
+    chain_der: Vec<Vec<u8>>,
     not_before_ts: i64,
     not_after_ts: i64,
 }
 
 impl Certificate {
     pub fn from_der(der: Vec<u8>) -> Result<Self> {
+        Self::from_der_chain(der, Vec::new())
+    }
+
+    pub fn from_der_chain(der: Vec<u8>, chain_der: Vec<Vec<u8>>) -> Result<Self> {
         let (not_before_ts, not_after_ts) = {
             let (_, cert) =
                 X509Certificate::from_der(&der).context("failed to parse certificate")?;
@@ -61,6 +69,7 @@ impl Certificate {
         };
         Ok(Self {
             der,
+            chain_der,
             not_before_ts,
             not_after_ts,
         })
@@ -95,6 +104,39 @@ impl Certificate {
         Ok(hex::encode(Sha256::digest(cert.public_key().raw)))
     }
 
+    /// Certificate association data for a TLSA record with the given parameters.
+    /// Usage 0/2 (trust anchor) hashes the first presented issuer certificate,
+    /// falling back to this certificate itself when no chain was presented
+    /// (a file-loaded CA cert, or a self-signed leaf that is its own anchor).
+    pub fn tlsa_record_data(&self, params: TlsaParams) -> Result<String> {
+        let der = if params.is_trust_anchor() {
+            self.chain_der.first().unwrap_or(&self.der)
+        } else {
+            &self.der
+        };
+        tlsa_association_data(der, params.selector, params.matching)
+    }
+
+    /// Whether a DNS TLSA record matches this certificate or its presented chain.
+    /// Usage 1/3 compares against the leaf; usage 0/2 against every presented
+    /// certificate (hash presence only — no PKIX or DANE-TA chain validation).
+    /// `None` when the record's parameters cannot be computed.
+    pub fn matches_tlsa(&self, record: &TlsaRecord) -> Option<bool> {
+        let candidates: Vec<&Vec<u8>> = match record.usage {
+            1 | 3 => vec![&self.der],
+            0 | 2 => std::iter::once(&self.der).chain(&self.chain_der).collect(),
+            _ => return None,
+        };
+        let mut matched = false;
+        for der in candidates {
+            match tlsa_association_data(der, record.selector, record.matching) {
+                Ok(data) => matched |= tlsa::hashes_equal(&data, &record.certificate),
+                Err(_) => return None,
+            }
+        }
+        Some(matched)
+    }
+
     pub fn details(&self) -> Result<CertDetails> {
         let cert = self.parsed()?;
         Ok(CertDetails {
@@ -125,6 +167,16 @@ impl Certificate {
     }
 
     pub fn print_info(&self, hostname: Option<&str>, ports: &[u16], show_info: bool) -> Result<()> {
+        self.print_info_params(hostname, ports, show_info, TlsaParams::default())
+    }
+
+    pub fn print_info_params(
+        &self,
+        hostname: Option<&str>,
+        ports: &[u16],
+        show_info: bool,
+        params: TlsaParams,
+    ) -> Result<()> {
         if show_info {
             let info = self.details()?;
             println!(">>> Certificate Information:");
@@ -138,22 +190,47 @@ impl Certificate {
             println!("Certificate Expiration: {}", info.not_after);
         }
 
-        let hash = self.spki_sha256_hex()?;
-        verbose::step(format_args!("SPKI SHA-256 {hash}"));
+        let hash = self.tlsa_record_data(params)?;
+        if params.is_default() {
+            verbose::step(format_args!("SPKI SHA-256 {hash}"));
+        } else {
+            verbose::step(format_args!("{} {hash}", params.label()));
+        }
         if ports.is_empty() {
             println!(
                 "TLSA {} {} {} {hash}",
-                tlsa::USAGE,
-                tlsa::SELECTOR,
-                tlsa::MATCHING
+                params.usage, params.selector, params.matching
             );
         } else {
             for port in ports {
-                println!("{}", tlsa::record_line(&owner_name(*port, hostname), &hash));
+                println!(
+                    "{}",
+                    tlsa::record_line_with(&owner_name(*port, hostname), params, &hash)
+                );
             }
         }
         Ok(())
     }
+}
+
+/// RFC 6698 §2.1: apply the selector (0 full cert, 1 SPKI) and matching type
+/// (0 exact, 1 SHA2-256, 2 SHA2-512) to a DER certificate.
+fn tlsa_association_data(der: &[u8], selector: u8, matching: u8) -> Result<String> {
+    let data: Vec<u8> = match selector {
+        0 => der.to_vec(),
+        1 => {
+            let (_, cert) =
+                X509Certificate::from_der(der).context("failed to parse certificate")?;
+            cert.public_key().raw.to_vec()
+        }
+        other => bail!("unsupported TLSA selector {other}"),
+    };
+    Ok(match matching {
+        0 => hex::encode(&data),
+        1 => hex::encode(Sha256::digest(&data)),
+        2 => hex::encode(Sha512::digest(&data)),
+        other => bail!("unsupported TLSA matching type {other}"),
+    })
 }
 
 pub fn fetch_live(host: &str, port: u16) -> Result<Certificate> {
@@ -270,16 +347,22 @@ fn tls_peer_cert(mut stream: TcpStream, server_name: &str) -> Result<Certificate
             .context("TLS handshake failed")?;
     }
 
-    let der = conn
+    let mut certs = conn
         .peer_certificates()
-        .and_then(|certs| certs.first())
+        .unwrap_or_default()
+        .iter()
         .map(|cert| cert.as_ref().to_vec())
-        .context("no peer certificate")?;
+        .collect::<Vec<_>>();
+    if certs.is_empty() {
+        bail!("no peer certificate");
+    }
+    let der = certs.remove(0);
     verbose::step(format_args!(
-        "received leaf certificate ({} bytes)",
-        der.len()
+        "received leaf certificate ({} bytes) and {} chain certificate(s)",
+        der.len(),
+        certs.len()
     ));
-    Certificate::from_der(der)
+    Certificate::from_der_chain(der, certs)
 }
 
 fn client_config() -> Result<ClientConfig> {
@@ -401,6 +484,58 @@ mod tests {
     use super::*;
 
     const TEST_CERT_PEM: &str = include_str!("../tests/fixtures/test.example.pem");
+    const SPKI_SHA512: &str = "d13899813b35185d9e3fe6fda257f15b4bfe8ec86ff9387155b3fcd9437692f50e018beeeef44ff767a151d31deb13719f6f7ec30e159c55cddef2b9531af1c1";
+    const CERT_SHA256: &str = "d954c9dea1cc3687da0e9d7d08e94d364407234cb634d148e40c6bff44a05110";
+    const CERT_SHA512: &str = "00537481b06573dcce15cbe75f6d5c63e1ae62f66396f6307ca985476e77417d5705840e6d8c67f7b3d6db48cf1e6fd630bdc571aecd469a0ef37528252a4f5a";
+
+    #[test]
+    fn tlsa_record_data_by_params() {
+        let cert = Certificate::from_pem_or_der(TEST_CERT_PEM.as_bytes()).unwrap();
+        let data = |usage, selector, matching| {
+            cert.tlsa_record_data(TlsaParams {
+                usage,
+                selector,
+                matching,
+            })
+            .unwrap()
+        };
+
+        assert_eq!(data(3, 1, 1), cert.spki_sha256_hex().unwrap());
+        assert_eq!(data(3, 0, 1), CERT_SHA256);
+        assert_eq!(data(3, 1, 2), SPKI_SHA512);
+        assert_eq!(data(3, 0, 2), CERT_SHA512);
+        // Matching type 0 is the exact DER, hex-encoded.
+        assert!(data(3, 1, 0).starts_with("30820122300d06092a864886f70d010101050003"));
+        // Trust-anchor usage with no presented chain falls back to the cert itself.
+        assert_eq!(data(2, 1, 1), data(3, 1, 1));
+    }
+
+    #[test]
+    fn matches_tlsa_by_params() {
+        let cert = Certificate::from_pem_or_der(TEST_CERT_PEM.as_bytes()).unwrap();
+        let record = |usage, selector, matching, hash: &str| TlsaRecord {
+            usage,
+            selector,
+            matching,
+            certificate: hash.into(),
+        };
+        let spki256 = cert.spki_sha256_hex().unwrap();
+
+        assert_eq!(
+            cert.matches_tlsa(&record(3, 1, 1, &spki256.to_uppercase())),
+            Some(true)
+        );
+        assert_eq!(cert.matches_tlsa(&record(3, 0, 1, CERT_SHA256)), Some(true));
+        assert_eq!(cert.matches_tlsa(&record(3, 1, 2, SPKI_SHA512)), Some(true));
+        assert_eq!(cert.matches_tlsa(&record(3, 1, 1, "beef")), Some(false));
+        // Trust-anchor usage matches any presented certificate (here just the leaf).
+        assert_eq!(cert.matches_tlsa(&record(2, 1, 1, &spki256)), Some(true));
+        assert_eq!(cert.matches_tlsa(&record(0, 0, 1, CERT_SHA256)), Some(true));
+        // Unassigned parameters are not comparable.
+        assert_eq!(cert.matches_tlsa(&record(9, 1, 1, &spki256)), None);
+        assert_eq!(cert.matches_tlsa(&record(3, 4, 1, &spki256)), None);
+        assert_eq!(cert.matches_tlsa(&record(3, 1, 7, &spki256)), None);
+    }
 
     #[test]
     fn rejects_garbage() {

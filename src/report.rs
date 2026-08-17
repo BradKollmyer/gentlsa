@@ -328,6 +328,20 @@ impl JsonTlsa {
         )
     }
 
+    /// Like [`Self::from_dns`], but with a chain-aware match verdict:
+    /// `Some(true)` → current, `Some(false)` → stale, `None` → not comparable.
+    pub fn from_dns_matched(record: &TlsaRecord, matched: Option<bool>) -> Self {
+        Self::from_fields(
+            None,
+            None,
+            record.usage,
+            record.selector,
+            record.matching,
+            record.certificate.clone(),
+            matched.map(|matched| if matched { "current" } else { "stale" }),
+        )
+    }
+
     pub fn to_text(&self) -> String {
         tlsa::rdata_text(self.usage, self.selector, self.matching, &self.certificate)
     }
@@ -392,6 +406,7 @@ impl GenerateResult {
         port: u16,
         host: String,
         hostname: Option<&str>,
+        params: tlsa::TlsaParams,
         hash: String,
         info: Option<CertDetails>,
     ) -> Self {
@@ -399,9 +414,9 @@ impl GenerateResult {
             port,
             host,
             owner: tlsa::owner_name(port, hostname),
-            usage: tlsa::USAGE,
-            selector: tlsa::SELECTOR,
-            matching: tlsa::MATCHING,
+            usage: params.usage,
+            selector: params.selector,
+            matching: params.matching,
             certificate: hash,
             info,
             cloudflare: None,
@@ -420,8 +435,15 @@ pub struct VerifyOutcome {
     pub exit: u8,
 }
 
-/// Nagios-style verdict from a live hash and the DNS TLSA set.
-pub fn verify_outcome(live: Option<&str>, dns: &[TlsaRecord]) -> VerifyOutcome {
+/// Nagios-style verdict from the DNS TLSA set and per-record match results
+/// (`Some(true)` matched the presented chain, `Some(false)` did not,
+/// `None` not comparable). `live` is the leaf SPKI SHA-256, used in the
+/// mismatch message; `None` means the certificate could not be fetched.
+pub fn verify_outcome(
+    live: Option<&str>,
+    dns: &[TlsaRecord],
+    matched: &[Option<bool>],
+) -> VerifyOutcome {
     const UNKNOWN: &str = "UNKNOWN - Something went wrong. Check logs";
     let Some(live) = live else {
         return VerifyOutcome {
@@ -437,10 +459,7 @@ pub fn verify_outcome(live: Option<&str>, dns: &[TlsaRecord]) -> VerifyOutcome {
             exit: 3,
         };
     }
-    if dns
-        .iter()
-        .any(|record| tlsa::hashes_equal(live, &record.certificate))
-    {
+    if matched.iter().flatten().any(|&matched| matched) {
         return VerifyOutcome {
             status: "ok",
             message: "OK - TLSA is valid".into(),
@@ -650,27 +669,31 @@ mod tests {
     fn verify_outcome_table() {
         let live = "aabbcc";
 
-        let ok = verify_outcome(Some(live), &[tlsa("AABBCC")]);
+        let ok = verify_outcome(Some(live), &[tlsa("AABBCC")], &[Some(true)]);
         assert_eq!(ok.status, "ok");
         assert_eq!(ok.exit, 0);
         assert_eq!(ok.message, "OK - TLSA is valid");
 
-        let mixed = verify_outcome(Some(live), &[tlsa("dddddd"), tlsa("AABBCC")]);
+        let mixed = verify_outcome(
+            Some(live),
+            &[tlsa("dddddd"), tlsa("AABBCC")],
+            &[Some(false), Some(true)],
+        );
         assert_eq!(mixed.exit, 0);
 
-        let err = verify_outcome(Some(live), &[tlsa("dddddd")]);
+        let err = verify_outcome(Some(live), &[tlsa("dddddd")], &[Some(false)]);
         assert_eq!(err.status, "error");
         assert_eq!(err.exit, 2);
         assert!(err.message.contains(live));
         assert!(err.message.contains("3 1 1 dddddd"));
 
-        let no_dns = verify_outcome(Some(live), &[]);
+        let no_dns = verify_outcome(Some(live), &[], &[]);
         assert_eq!((no_dns.status, no_dns.exit), ("unknown", 3));
 
-        let no_live = verify_outcome(None, &[tlsa("AABBCC")]);
+        let no_live = verify_outcome(None, &[tlsa("AABBCC")], &[Some(true)]);
         assert_eq!((no_live.status, no_live.exit), ("unknown", 3));
 
-        let neither = verify_outcome(None, &[]);
+        let neither = verify_outcome(None, &[], &[]);
         assert_eq!(neither.exit, 3);
         assert_eq!(
             neither.message,
@@ -680,7 +703,7 @@ mod tests {
 
     #[test]
     fn apply_expiry_thresholds() {
-        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")]);
+        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")], &[Some(true)]);
 
         let far = apply_expiry(ok.clone(), 90, false, 14, 7);
         assert_eq!((far.status, far.exit), ("ok", 0));
@@ -715,20 +738,20 @@ mod tests {
 
     #[test]
     fn apply_expiry_does_not_hide_hash_mismatch() {
-        let err = verify_outcome(Some("aabbcc"), &[tlsa("dddddd")]);
+        let err = verify_outcome(Some("aabbcc"), &[tlsa("dddddd")], &[Some(false)]);
         let still = apply_expiry(err.clone(), 0, false, 14, 7);
         assert_eq!(still.exit, 2);
         assert_eq!(still.status, "error");
         assert!(still.message.contains("ERROR - TLSA invalid"));
 
-        let unknown = verify_outcome(None, &[]);
+        let unknown = verify_outcome(None, &[], &[]);
         let still_unknown = apply_expiry(unknown, -1, false, 14, 7);
         assert_eq!(still_unknown.exit, 3);
     }
 
     #[test]
     fn apply_dnssec_verdicts() {
-        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")]);
+        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")], &[Some(true)]);
 
         let secure = apply_dnssec(ok.clone(), Some(DnssecStatus::Secure));
         assert_eq!((secure.status, secure.exit), ("ok", 0));
@@ -757,18 +780,18 @@ mod tests {
     #[test]
     fn apply_dnssec_does_not_hide_worse_verdicts() {
         // A hash mismatch keeps its ERROR message even when the RRset is bogus.
-        let err = verify_outcome(Some("aabbcc"), &[tlsa("dddddd")]);
+        let err = verify_outcome(Some("aabbcc"), &[tlsa("dddddd")], &[Some(false)]);
         let still = apply_dnssec(err, Some(DnssecStatus::Bogus));
         assert_eq!((still.status, still.exit), ("error", 2));
         assert!(still.message.contains("ERROR - TLSA invalid"));
 
         // UNKNOWN stays UNKNOWN: without records there is nothing to judge.
-        let unknown = verify_outcome(None, &[]);
+        let unknown = verify_outcome(None, &[], &[]);
         let still_unknown = apply_dnssec(unknown, Some(DnssecStatus::Bogus));
         assert_eq!(still_unknown.exit, 3);
 
         // An expiry WARNING keeps its message, but bogus still escalates it.
-        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")]);
+        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")], &[Some(true)]);
         let warn = apply_expiry(ok, 10, false, 14, 7);
         let insecure_warn = apply_dnssec(warn.clone(), Some(DnssecStatus::Insecure));
         assert_eq!(insecure_warn.exit, 1);
@@ -803,6 +826,7 @@ mod tests {
                 443,
                 "example.com".into(),
                 None,
+                tlsa::TlsaParams::default(),
                 hash.into(),
                 None,
             )],
@@ -827,7 +851,7 @@ mod tests {
     fn verify_report_json_shape() {
         let live = "aabb";
         let current = [tlsa(live)];
-        let ok_outcome = verify_outcome(Some(live), &current);
+        let ok_outcome = verify_outcome(Some(live), &current, &[Some(true)]);
         let ok = VerifyResult {
             port: 443,
             name: "_443._tcp.example.com.".into(),
@@ -842,7 +866,7 @@ mod tests {
         };
 
         let stale = [tlsa("cccc")];
-        let err_outcome = verify_outcome(Some(live), &stale);
+        let err_outcome = verify_outcome(Some(live), &stale, &[Some(false)]);
         let err = VerifyResult {
             port: 25,
             name: "_25._tcp.example.com.".into(),

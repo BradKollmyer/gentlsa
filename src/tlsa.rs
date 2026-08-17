@@ -1,7 +1,40 @@
-/// DANE-EE / SPKI / SHA-256 — the record this tool generates.
+/// DANE-EE / SPKI / SHA-256 — the record this tool generates by default.
 pub const USAGE: u8 = 3;
 pub const SELECTOR: u8 = 1;
 pub const MATCHING: u8 = 1;
+
+/// The usage/selector/matching triple for a TLSA record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TlsaParams {
+    pub usage: u8,
+    pub selector: u8,
+    pub matching: u8,
+}
+
+impl Default for TlsaParams {
+    fn default() -> Self {
+        Self {
+            usage: USAGE,
+            selector: SELECTOR,
+            matching: MATCHING,
+        }
+    }
+}
+
+impl TlsaParams {
+    pub fn is_default(self) -> bool {
+        self == Self::default()
+    }
+
+    /// Usage 0 (PKIX-TA) and 2 (DANE-TA) hash a CA certificate, not the leaf.
+    pub fn is_trust_anchor(self) -> bool {
+        matches!(self.usage, 0 | 2)
+    }
+
+    pub fn label(self) -> String {
+        params_label(self.usage, self.selector, self.matching)
+    }
+}
 
 /// RFC 7218 certificate usage name, if assigned.
 pub fn usage_name(usage: u8) -> Option<&'static str> {
@@ -97,8 +130,11 @@ pub fn uses_starttls(port: u16) -> bool {
     matches!(port, 25 | 587)
 }
 
-pub fn record_line(owner: &str, hash: &str) -> String {
-    format!("{owner} TLSA {USAGE} {SELECTOR} {MATCHING} {hash}")
+pub fn record_line_with(owner: &str, params: TlsaParams, hash: &str) -> String {
+    format!(
+        "{owner} TLSA {} {} {} {hash}",
+        params.usage, params.selector, params.matching
+    )
 }
 
 pub fn hashes_equal(live: &str, dns: &str) -> bool {

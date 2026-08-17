@@ -30,7 +30,7 @@ use crate::report::{
     ZoneRef, apply_dnssec, apply_expiry, expiry_phrase, verify_outcome, worst_verify_exit,
 };
 use crate::route53::Client as Route53;
-use crate::tlsa::{connect_host, fqdn};
+use crate::tlsa::{TlsaParams, connect_host, fqdn};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -59,16 +59,19 @@ async fn run() -> Result<u8> {
             ports,
             hostname,
             info,
+            params,
             publisher,
             replace,
             dryrun,
         } => {
             let publisher = PublisherOpts::from_flags(publisher, replace, dryrun)?;
+            let params = params.params();
+            require_default_params_for_publish(params, &publisher)?;
             let mut code = 0;
             let mut results = Vec::new();
             for port in ports.as_slice() {
                 let (port_code, result) =
-                    generate(&zone, *port, hostname.as_deref(), info, publisher).await?;
+                    generate(&zone, *port, hostname.as_deref(), info, params, publisher).await?;
                 code = port_code;
                 results.push(result);
             }
@@ -224,16 +227,19 @@ async fn run() -> Result<u8> {
             hostname,
             ports,
             info,
+            params,
             publisher,
             replace,
             dryrun,
         } => {
             let publisher = PublisherOpts::from_flags(publisher, replace, dryrun)?;
+            let params = params.params();
+            require_default_params_for_publish(params, &publisher)?;
             let ports = ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]);
             verbose::step(format_args!("file {}", certfile.display()));
             let cert = Certificate::from_file(&certfile)?;
             if !output::is_json() {
-                cert.print_info(hostname.as_deref(), ports, info)?;
+                cert.print_info_params(hostname.as_deref(), ports, info, params)?;
             }
 
             let mut code = 0;
@@ -269,13 +275,13 @@ async fn run() -> Result<u8> {
             }
 
             if output::is_json() {
-                let hash = cert.spki_sha256_hex()?;
-                verbose::step(format_args!("SPKI SHA-256 {hash}"));
+                let hash = cert.tlsa_record_data(params)?;
+                verbose::step(format_args!("{} {hash}", params.label()));
                 output::emit(&Report::File {
                     path: certfile.display().to_string(),
-                    usage: tlsa::USAGE,
-                    selector: tlsa::SELECTOR,
-                    matching: tlsa::MATCHING,
+                    usage: params.usage,
+                    selector: params.selector,
+                    matching: params.matching,
                     certificate: hash,
                     info: if info { Some(cert.details()?) } else { None },
                     records: ports
@@ -295,6 +301,18 @@ async fn run() -> Result<u8> {
             Ok(code)
         }
     }
+}
+
+/// The publishers' rollover/replace/prune logic only understands 3 1 1, so
+/// refuse to publish anything else rather than silently writing wrong params.
+fn require_default_params_for_publish(params: TlsaParams, publisher: &PublisherOpts) -> Result<()> {
+    if publisher.kind.is_some() && !params.is_default() {
+        anyhow::bail!(
+            "publishing TLSA records other than 3 1 1 is not supported yet; \
+             drop the publisher flag and add the printed record manually"
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -798,19 +816,21 @@ async fn generate(
     port: u16,
     hostname: Option<&str>,
     info: bool,
+    params: TlsaParams,
     publisher: PublisherOpts,
 ) -> Result<(u8, GenerateResult)> {
     let host = connect_host(zone, hostname);
     verbose::step(format_args!("generate {host}:{port}"));
     let cert = fetch_live(&host, port)?;
     if !output::is_json() {
-        cert.print_info(hostname, &[port], info)?;
+        cert.print_info_params(hostname, &[port], info, params)?;
     }
-    let hash = cert.spki_sha256_hex()?;
+    let hash = cert.tlsa_record_data(params)?;
     let mut result = GenerateResult::from_cert(
         port,
         host,
         hostname,
+        params,
         hash,
         if info { Some(cert.details()?) } else { None },
     );
@@ -1379,7 +1399,7 @@ async fn verify(
                 dns: Vec<JsonTlsa>,
                 info: Option<CertDetails>,
                 dnssec: Option<dns::DnssecStatus>| {
-        let outcome = verify_outcome(live.as_deref(), &[]);
+        let outcome = verify_outcome(live.as_deref(), &[], &[]);
         say(&outcome.message);
         VerifyResult {
             port,
@@ -1487,9 +1507,14 @@ async fn verify(
         }
     };
 
+    let matched: Vec<Option<bool>> = dns_record
+        .iter()
+        .map(|record| cert.matches_tlsa(record))
+        .collect();
     let dns = dns_record
         .iter()
-        .map(|record| JsonTlsa::from_dns(record, Some(&host_hash)))
+        .zip(&matched)
+        .map(|(record, matched)| JsonTlsa::from_dns_matched(record, *matched))
         .collect();
 
     let lifetime = cert.lifetime();
@@ -1498,11 +1523,11 @@ async fn verify(
         expiry_phrase(lifetime.days_left, lifetime.not_yet_valid)
     ));
 
-    let mut outcome = verify_outcome(Some(&host_hash), &dns_record);
+    let mut outcome = verify_outcome(Some(&host_hash), &dns_record, &matched);
     match outcome.exit {
-        0 => verbose::step("live hash matches a DNS TLSA record"),
+        0 => verbose::step("presented chain matches a DNS TLSA record"),
         2 => verbose::step(format_args!(
-            "live hash {host_hash} does not match any DNS TLSA record"
+            "no DNS TLSA record matches the presented chain (leaf SPKI SHA-256 {host_hash})"
         )),
         _ => verbose::step(format_args!("no TLSA records at {name}")),
     }

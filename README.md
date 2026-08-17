@@ -87,7 +87,7 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare|--nsupdate|--route53|--google] [--replace] [--dryrun]
+gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google] [--replace] [--dryrun]
 gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--info]
 gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--dryrun]
 gentlsa [-v|--verbose] [--json] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
@@ -97,7 +97,7 @@ gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] nsupdate [--info]
 gentlsa [-v|--verbose] [--json] route53 [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] google [--info] [--listzones]
-gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare|--nsupdate|--route53|--google]
+gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google]
 ```
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
@@ -167,7 +167,14 @@ SMTP STARTTLS example (connects to `smtp.gmail.com:587`):
 $ gentlsa generate gmail.com 587 --hostname smtp --info
 ```
 
-`--cloudflare`, `--nsupdate`, `--route53`, or `--google` publishes the live hash. If a TLSA record already exists, the new hash is **added** and the old one is kept (DANE key rollover). Use `--replace` to overwrite instead. `--dryrun` shows the action without writing. The publishers are mutually exclusive. Publishing to a zone that has no DS record prints a warning on stderr: without a signed delegation, DANE clients cannot authenticate the TLSA records and ignore them.
+`--usage` (0-3, default 3 DANE-EE), `--selector` (0 full certificate, 1 SubjectPublicKeyInfo; default 1), and `--matching` (0 exact, 1 SHA2-256, 2 SHA2-512; default 1) select other TLSA parameters. With usage 0 or 2 (trust anchor), `generate` hashes the first issuer certificate the server presents instead of the leaf (a self-signed leaf is its own anchor):
+
+```
+$ gentlsa generate example.com 443 --usage 2
+_443._tcp TLSA 2 1 1 e38be21734c2fa1fcbfb7387460e11b39bf8f80729cc766f23d4e77b64433469
+```
+
+`--cloudflare`, `--nsupdate`, `--route53`, or `--google` publishes the live hash. If a TLSA record already exists, the new hash is **added** and the old one is kept (DANE key rollover). Use `--replace` to overwrite instead. `--dryrun` shows the action without writing. The publishers are mutually exclusive. Publishing to a zone that has no DS record prints a warning on stderr: without a signed delegation, DANE clients cannot authenticate the TLSA records and ignore them. Publishing is limited to `3 1 1` records; other `--usage`/`--selector`/`--matching` values are print-only for now.
 
 ```
 $ gentlsa generate example.com 443 --cloudflare --info
@@ -176,7 +183,7 @@ $ gentlsa generate example.com 25 --hostname mx --cloudflare --dryrun
 
 ### verify
 
-Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate (Nagios-compatible). After a hash match, remaining days until `notAfter` are checked against `--warn` (default 14) and `--critical` (default 7). `--critical` cannot be greater than `--warn` (rejected with exit 3, UNKNOWN). `--no-expiry-check` skips the expiry check and restores the hash-only verdict (the pre-0.4.1 exit behavior). A hash mismatch stays `ERROR` even if the cert is also expiring.
+Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate chain (Nagios-compatible). Each record is evaluated with its own parameters: usage 1/3 against the leaf, usage 0/2 against every certificate the server presents, selectors 0/1, matching types 0/1/2 (hash presence only — no PKIX or DANE-TA chain validation). A zone that publishes only `2 1 1` therefore verifies correctly. After a hash match, remaining days until `notAfter` are checked against `--warn` (default 14) and `--critical` (default 7). `--critical` cannot be greater than `--warn` (rejected with exit 3, UNKNOWN). `--no-expiry-check` skips the expiry check and restores the hash-only verdict (the pre-0.4.1 exit behavior). A hash mismatch stays `ERROR` even if the cert is also expiring.
 
 The TLSA records are also validated with DNSSEC (locally, from the root trust anchor, through the system resolver). A DANE client only honors TLSA records that validate as secure, so a matching hash in an unsigned zone is `WARNING` — DANE is inert there — and a bogus RRset is `CRITICAL`, because validating resolvers answer SERVFAIL and DANE clients cannot connect at all. `--no-dnssec-check` skips this (the pre-0.5.0 behavior). Note that a resolver that strips DNSSEC records (some home routers) makes every zone look unauthenticated; point `/etc/resolv.conf` at a full resolver or use `--no-dnssec-check`.
 
@@ -250,7 +257,7 @@ See [Certificate renewal / key rollover](#certificate-renewal--key-rollover) for
 
 ### file
 
-Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name. With a publisher flag (and `--zone --port`), publish that file's hash before you reload the service:
+Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. `--usage`/`--selector`/`--matching` work as in `generate`; for a trust-anchor record (`--usage 2`), pass the CA certificate file itself. Pass `--port` / `--hostname` to include the owner name. With a publisher flag (and `--zone --port`), publish that file's hash before you reload the service:
 
 ```
 $ gentlsa file /etc/ssl/certs/example.pem --port 443

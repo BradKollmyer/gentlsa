@@ -38,6 +38,30 @@ impl FromStr for Ports {
     }
 }
 
+/// TLSA usage/selector/matching flags shared by generate and file.
+#[derive(Debug, Clone, Copy, clap::Args)]
+pub struct TlsaParamFlags {
+    /// TLSA certificate usage: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE
+    #[arg(long, default_value_t = crate::tlsa::USAGE, value_parser = clap::value_parser!(u8).range(0..=3))]
+    pub usage: u8,
+    /// TLSA selector: 0 full certificate, 1 SubjectPublicKeyInfo
+    #[arg(long, default_value_t = crate::tlsa::SELECTOR, value_parser = clap::value_parser!(u8).range(0..=1))]
+    pub selector: u8,
+    /// TLSA matching type: 0 exact, 1 SHA2-256, 2 SHA2-512
+    #[arg(long, default_value_t = crate::tlsa::MATCHING, value_parser = clap::value_parser!(u8).range(0..=2))]
+    pub matching: u8,
+}
+
+impl TlsaParamFlags {
+    pub fn params(self) -> crate::tlsa::TlsaParams {
+        crate::tlsa::TlsaParams {
+            usage: self.usage,
+            selector: self.selector,
+            matching: self.matching,
+        }
+    }
+}
+
 /// Mutually exclusive publisher flags shared by generate/list/prune/file/rollover.
 #[derive(Debug, Clone, Copy, Default, clap::Args)]
 pub struct PublisherFlags {
@@ -107,6 +131,8 @@ pub enum Command {
         /// Print certificate details
         #[arg(long)]
         info: bool,
+        #[command(flatten)]
+        params: TlsaParamFlags,
         #[command(flatten)]
         publisher: PublisherFlags,
         /// With a publisher, overwrite the existing TLSA instead of adding a rollover record
@@ -254,6 +280,8 @@ pub enum Command {
         #[arg(long, default_value_t = true)]
         info: bool,
         #[command(flatten)]
+        params: TlsaParamFlags,
+        #[command(flatten)]
         publisher: PublisherFlags,
         #[arg(long)]
         replace: bool,
@@ -355,6 +383,60 @@ mod tests {
         match cli.command {
             Command::File { ports, .. } => assert_eq!(ports.unwrap().0, vec![25, 465]),
             other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_tlsa_params() {
+        let cli = Cli::try_parse_from([
+            "gentlsa",
+            "generate",
+            "example.com",
+            "443",
+            "--usage",
+            "2",
+            "--selector",
+            "0",
+            "--matching",
+            "2",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Generate { params, .. } => {
+                let params = params.params();
+                assert_eq!((params.usage, params.selector, params.matching), (2, 0, 2));
+                assert!(!params.is_default());
+                assert!(params.is_trust_anchor());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["gentlsa", "file", "cert.pem"]).unwrap();
+        match cli.command {
+            Command::File { params, .. } => assert!(params.params().is_default()),
+            other => panic!("unexpected {other:?}"),
+        }
+
+        for args in [
+            ["gentlsa", "generate", "example.com", "443", "--usage", "4"],
+            [
+                "gentlsa",
+                "generate",
+                "example.com",
+                "443",
+                "--selector",
+                "2",
+            ],
+            [
+                "gentlsa",
+                "generate",
+                "example.com",
+                "443",
+                "--matching",
+                "3",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
         }
     }
 
