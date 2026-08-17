@@ -256,7 +256,7 @@ Auth: API token
 
 ## Cloudflare credentials
 
-Create `~/.cloudflare/cloudflare.cfg`. A scoped API token (no email) is preferred:
+Create `/etc/gentlsa/cloudflare.cfg`. A scoped API token (no email) is preferred:
 
 ```
 [CloudFlare]
@@ -270,6 +270,8 @@ token = <api token>
 email = <cloudflare login>
 token = <global API key>
 ```
+
+`~/.cloudflare/cloudflare.cfg` is still read if `/etc/gentlsa/cloudflare.cfg` is missing.
 
 Environment variables override the config file:
 

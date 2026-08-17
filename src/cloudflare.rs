@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -663,35 +663,43 @@ fn load_auth() -> Result<Auth> {
         return Ok(Auth::Key { email, key });
     }
 
-    if let Some(auth) = load_config_auth()? {
+    if let Some((auth, path)) = load_config_auth()? {
         verbose::step(format_args!(
             "Cloudflare credentials from {}",
-            config_path().display()
+            path.display()
         ));
         return Ok(auth);
     }
 
     bail!(
-        "Please configure Cloudflare credentials in ~/.cloudflare/cloudflare.cfg \
+        "Please configure Cloudflare credentials in /etc/gentlsa/cloudflare.cfg \
          or CF_API_TOKEN / CF_API_EMAIL+CF_API_KEY"
     )
 }
 
-fn load_config_auth() -> Result<Option<Auth>> {
-    let path = config_path();
+fn load_config_auth() -> Result<Option<(Auth, PathBuf)>> {
+    for path in config_paths() {
+        if let Some(auth) = load_config_auth_from(&path)? {
+            return Ok(Some((auth, path)));
+        }
+    }
+    Ok(None)
+}
+
+fn load_config_auth_from(path: &Path) -> Result<Option<Auth>> {
     if !path.exists() {
         return Ok(None);
     }
 
-    let conf = ini::Ini::load_from_file(&path)
+    let conf = ini::Ini::load_from_file(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(auth_from_ini(&conf))
+}
+
+fn auth_from_ini(conf: &ini::Ini) -> Option<Auth> {
     let section = conf
         .section(Some("CloudFlare"))
-        .or_else(|| conf.section(Some("Cloudflare")));
-
-    let Some(section) = section else {
-        return Ok(None);
-    };
+        .or_else(|| conf.section(Some("Cloudflare")))?;
 
     let token = section
         .get("api_token")
@@ -707,17 +715,18 @@ fn load_config_auth() -> Result<Option<Auth>> {
         .map(ToOwned::to_owned);
 
     match (email, token) {
-        (Some(email), Some(token)) => Ok(Some(Auth::Key { email, key: token })),
-        (None, Some(token)) => Ok(Some(Auth::Token(token))),
-        _ => Ok(None),
+        (Some(email), Some(token)) => Some(Auth::Key { email, key: token }),
+        (None, Some(token)) => Some(Auth::Token(token)),
+        _ => None,
     }
 }
 
-fn config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".cloudflare")
-        .join("cloudflare.cfg")
+fn config_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("/etc/gentlsa/cloudflare.cfg")];
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".cloudflare").join("cloudflare.cfg"));
+    }
+    paths
 }
 
 fn first_env(keys: &[&str]) -> Result<String> {
@@ -879,5 +888,51 @@ mod tests {
         let current_only = [record("_25._tcp.mx.example.org", "aa")];
         let none = stale_tlsa(&current_only, &expected, "AA");
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn config_paths_prefer_etc_gentlsa() {
+        let paths = config_paths();
+        assert_eq!(paths[0], PathBuf::from("/etc/gentlsa/cloudflare.cfg"));
+        assert!(paths.iter().any(|path| {
+            path.file_name().is_some_and(|name| name == "cloudflare.cfg")
+                && path
+                    .parent()
+                    .and_then(|parent| parent.file_name())
+                    .is_some_and(|name| name == ".cloudflare")
+        }));
+    }
+
+    #[test]
+    fn auth_from_ini_token_only() {
+        let conf = ini::Ini::load_from_str("[CloudFlare]\ntoken = abc\n").unwrap();
+        match auth_from_ini(&conf) {
+            Some(Auth::Token(token)) => assert_eq!(token, "abc"),
+            other => panic!("expected token auth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auth_from_ini_accepts_aliases_and_email() {
+        let conf = ini::Ini::load_from_str(
+            "[Cloudflare]\nemail = ops@example.com\napi_token = global-key\n",
+        )
+        .unwrap();
+        match auth_from_ini(&conf) {
+            Some(Auth::Key { email, key }) => {
+                assert_eq!(email, "ops@example.com");
+                assert_eq!(key, "global-key");
+            }
+            other => panic!("expected key auth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auth_from_ini_ignores_empty_or_missing() {
+        let missing = ini::Ini::load_from_str("[other]\ntoken = abc\n").unwrap();
+        assert!(auth_from_ini(&missing).is_none());
+
+        let empty = ini::Ini::load_from_str("[CloudFlare]\ntoken = \n").unwrap();
+        assert!(auth_from_ini(&empty).is_none());
     }
 }

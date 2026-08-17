@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Read Cloudflare credentials from `/etc/gentlsa/cloudflare.cfg` (falls back to `~/.cloudflare/cloudflare.cfg`)
 - Add `--json` to emit a single JSON object on stdout
 - Add `-v` / `--verbose` to print each processing step on stderr
 - Accept a comma-separated port list (`25,465`) on generate, list, prune, verify, and file
