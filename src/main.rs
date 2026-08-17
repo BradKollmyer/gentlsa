@@ -101,7 +101,11 @@ async fn run() -> Result<u8> {
                         starttls,
                     )
                     .await?;
-                    code = port_code;
+                    // Keep the first failure: a later healthy host must not
+                    // reset the exit code and hide it.
+                    if port_code != 0 {
+                        code = port_code;
+                    }
                     results.push(result);
                 }
             }
@@ -177,7 +181,11 @@ async fn run() -> Result<u8> {
                         starttls,
                     )
                     .await?;
-                    code = port_code;
+                    // Keep the first failure: a later healthy host must not
+                    // reset the exit code and hide it.
+                    if port_code != 0 {
+                        code = port_code;
+                    }
                     results.push(result);
                 }
             }
@@ -1031,7 +1039,19 @@ async fn generate(
 ) -> Result<(u8, GenerateResult)> {
     let host = connect_host(zone, hostname);
     verbose::step(format_args!("generate {host}:{port}"));
-    let cert = fetch_live(&host, port, starttls)?;
+    // An unreachable host must not abort the run: under --mx the other
+    // exchanges are still worth publishing.
+    let cert = match fetch_live(&host, port, starttls) {
+        Ok(cert) => cert,
+        Err(err) => {
+            let message = format!("{err:#}");
+            eprintln!("{message}");
+            return Ok((
+                1,
+                GenerateResult::unreachable(port, host, hostname, params, message),
+            ));
+        }
+    };
     if !output::is_json() {
         cert.print_info_params(hostname, &[port], info, params)?;
     }
@@ -1529,7 +1549,29 @@ async fn prune(
         "prune {host}:{port} publisher={} dryrun={dryrun}",
         publisher.map(PublisherKind::flag).unwrap_or("(none)")
     ));
-    let cert = fetch_live(&host, port, starttls)?;
+    // As in generate: one unreachable exchange must not abort a --mx run.
+    let cert = match fetch_live(&host, port, starttls) {
+        Ok(cert) => cert,
+        Err(err) => {
+            let message = format!("{err:#}");
+            eprintln!("{message}");
+            return Ok((
+                1,
+                PruneResult {
+                    port,
+                    host,
+                    live: String::new(),
+                    dns: Vec::new(),
+                    cloudflare: None,
+                    nsupdate: None,
+                    route53: None,
+                    google: None,
+                    azure: None,
+                    error: Some(message),
+                },
+            ));
+        }
+    };
     let live_hash = cert.spki_sha256_hex()?;
     verbose::step(format_args!("live SPKI SHA-256 {live_hash}"));
     output::text(format!(

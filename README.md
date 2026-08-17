@@ -114,6 +114,8 @@ It bounds network work, not the lifetime of the process: `rollover` deliberately
 
 `--mx` looks up the zone's MX records and runs the command on each exchange host (lowest preference first). Conflicts with `--hostname`. Port 25 is the usual DANE SMTP port. An MX that lives in another zone is still verified or printed; publishing its TLSA into this zone is refused. A null MX (RFC 7505) is skipped.
 
+An exchange that cannot be reached does not abort the run: the failure is recorded (in `--json`, as `error` on that result, with `certificate` omitted) and the remaining hosts are still processed. The command then exits non-zero even if a later host succeeded. The same applies to a port list.
+
 The MX RRset is itself DNSSEC-validated. SMTP DANE only means something over a secure MX RRset (RFC 7672 §2.2): whoever can forge an insecure MX answer picks the hostname you connect to, and can then publish a properly signed TLSA record at that name for a key they hold — every per-host check would report `secure` while the attacker chose the host. So `verify --mx` treats an unauthenticated MX RRset as WARNING and a bogus one as CRITICAL, even when the TLSA records themselves validate; `--no-dnssec-check` skips both checks. `generate --mx` and `prune --mx` print a warning on stderr instead.
 
 ```

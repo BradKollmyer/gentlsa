@@ -153,6 +153,8 @@ pub struct GenerateResult {
     pub usage: u8,
     pub selector: u8,
     pub matching: u8,
+    /// Empty when the host could not be reached.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub certificate: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub info: Option<CertDetails>,
@@ -228,6 +230,8 @@ pub struct JsonTlsa {
 pub struct PruneResult {
     pub port: u16,
     pub host: String,
+    /// Empty when the host could not be reached.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub live: String,
     pub dns: Vec<JsonTlsa>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -454,6 +458,23 @@ impl GenerateResult {
             google: None,
             azure: None,
             error: None,
+        }
+    }
+
+    /// A host that could not be reached. Under `--mx` the remaining exchanges
+    /// are still processed, so the failure has to be carried in the report
+    /// rather than aborting the run.
+    pub fn unreachable(
+        port: u16,
+        host: String,
+        hostname: Option<&str>,
+        params: tlsa::TlsaParams,
+        error: String,
+    ) -> Self {
+        Self {
+            certificate: String::new(),
+            error: Some(error),
+            ..Self::from_cert(port, host, hostname, params, String::new(), None)
         }
     }
 }
@@ -953,6 +974,57 @@ mod tests {
         assert!(value["results"][0].get("nsupdate").is_none());
         assert!(value["results"][0].get("error").is_none());
         assert!(value["results"][0].get("info").is_none());
+    }
+
+    /// Under `--mx` an unreachable exchange is reported and the run continues,
+    /// so a report can mix reachable and unreachable hosts.
+    #[test]
+    fn generate_report_keeps_unreachable_hosts() {
+        let hash = "ff94ad7dfafffed26e98150947dd8b1a7d981fabf90740c574685c81d487b9a8";
+        let params = tlsa::TlsaParams::default();
+        let report = Report::Generate {
+            zone: "example.com".into(),
+            hostname: None,
+            mx: true,
+            results: vec![
+                GenerateResult::unreachable(
+                    25,
+                    "mx1.example.com".into(),
+                    Some("mx1"),
+                    params,
+                    "connect mx1.example.com:25: timed out after 30s".into(),
+                ),
+                GenerateResult::from_cert(
+                    25,
+                    "mx2.example.com".into(),
+                    Some("mx2"),
+                    params,
+                    hash.into(),
+                    None,
+                ),
+            ],
+        };
+        let value = serde_json::to_value(&report).unwrap();
+
+        // The dead exchange carries its error and omits the association data.
+        let dead = &value["results"][0];
+        assert_eq!(dead["host"], "mx1.example.com");
+        assert_eq!(dead["owner"], "_25._tcp.mx1");
+        assert!(
+            dead["error"]
+                .as_str()
+                .unwrap()
+                .contains("timed out after 30s")
+        );
+        assert!(
+            dead.get("certificate").is_none(),
+            "an unreachable host has no association data to report"
+        );
+
+        // The healthy one is unaffected.
+        let live = &value["results"][1];
+        assert_eq!(live["certificate"], hash);
+        assert!(live.get("error").is_none());
     }
 
     #[test]
