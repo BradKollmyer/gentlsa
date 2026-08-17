@@ -108,7 +108,9 @@ gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] file <CERTFILE> [--zone <Z
 
 `--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `1` / `2` / `3`) and puts the result in `status` (`ok` / `warning` / `critical` / `error` / `unknown`), `message`, and `exit`.
 
-`--timeout <SECONDS>` (default 30) is an overall deadline for hostname resolution, TCP connect, STARTTLS, the TLS handshake, and DNS (including DNSSEC). A timed-out `verify` exits UNKNOWN. Set this below the Nagios service check timeout (for example `--timeout 10` when the check is 15s).
+`--timeout <SECONDS>` (default 30) is a deadline for hostname resolution, TCP connect, STARTTLS, the TLS handshake, and DNS (including DNSSEC). A timed-out `verify` exits UNKNOWN. Set this below the Nagios service check timeout (for example `--timeout 10` when the check is 15s).
+
+It bounds network work, not the lifetime of the process: `rollover` deliberately sleeps two TLSA TTLs between phases and shells out to `--reload`, so the budget is re-armed after each wait and after the reload command. Otherwise the prune phase would open its connection with a deadline that expired hours earlier.
 
 `--mx` looks up the zone's MX records and runs the command on each exchange host (lowest preference first). Conflicts with `--hostname`. Port 25 is the usual DANE SMTP port. An MX that lives in another zone is still verified or printed; publishing its TLSA into this zone is refused. A null MX (RFC 7505) is skipped.
 

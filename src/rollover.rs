@@ -121,6 +121,9 @@ pub async fn wait_ttl(ttl: u64, reason: WaitReason, dryrun: bool) {
     }
     verbose::step(format_args!("sleeping {ttl}s {}", reason.as_str()));
     tokio::time::sleep(std::time::Duration::from_secs(ttl)).await;
+    // The wait is deliberate and can run for hours; it must not consume the
+    // connect/IO budget that the next phase needs.
+    crate::timeout::restart();
 }
 
 pub fn now_unix() -> u64 {
@@ -768,5 +771,38 @@ mod tests {
         drop(guard);
         assert!(!lock.exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The whole point of the fix: a rollover wait is deliberate and can run
+    /// for hours, so the next phase must not inherit an exhausted budget.
+    /// Before this, `rollover --reload` always died in the prune phase with
+    /// "timed out after Ns" and left the job file behind.
+    // The guard is held across the sleep on purpose: it serializes the
+    // process-wide timeout state against the other test that mutates it.
+    // Each #[tokio::test] gets its own current-thread runtime, so no other
+    // task can contend for this lock while it is held.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn wait_ttl_rearms_the_timeout_budget() {
+        let _guard = crate::timeout::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        crate::timeout::init_for_test(std::time::Duration::from_millis(20));
+
+        wait_ttl(1, WaitReason::BeforePrune, false).await;
+
+        assert!(
+            crate::timeout::remaining().is_ok(),
+            "a wait longer than the budget must not leave the next phase expired"
+        );
+        crate::timeout::clear_for_test();
+    }
+
+    /// A dry run does not sleep, so it has nothing to re-arm.
+    #[tokio::test]
+    async fn wait_ttl_dryrun_does_not_sleep() {
+        let started = std::time::Instant::now();
+        wait_ttl(3600, WaitReason::BeforeReload, true).await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }

@@ -910,7 +910,11 @@ async fn execute_rollover(
                         exit: None,
                     });
                 } else {
-                    match rollover::run_reload(command) {
+                    let outcome = rollover::run_reload(command);
+                    // The reload command is user-supplied and unbounded; do not
+                    // charge its runtime to the next phase's network budget.
+                    timeout::restart();
+                    match outcome {
                         Ok(exit) => {
                             reload_report = Some(ReloadReport {
                                 command: command.to_string(),

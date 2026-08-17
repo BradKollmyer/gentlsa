@@ -207,7 +207,7 @@ Print one JSON object on standard output instead of text.
 .Fl -verbose
 can still be combined; steps stay on standard error.
 .It Fl -timeout Ar seconds
-Overall deadline for hostname resolution, TCP connect, STARTTLS,
+Deadline for hostname resolution, TCP connect, STARTTLS,
 the TLS handshake, and DNS
 .Pq including DNSSEC .
 Default 30.
@@ -215,6 +215,12 @@ A timed-out
 .Cm verify
 exits UNKNOWN.
 Set this below the Nagios service check timeout.
+It bounds network work, not the lifetime of the process: the budget is
+re-armed after each
+.Cm rollover
+wait and after
+.Fl -reload ,
+which are deliberate and can run for hours.
 .El
 .Sh COMMANDS
 .Ss generate
