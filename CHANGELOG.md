@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-08-17
 
 - `rollover` publishes a not-yet-live certificate hash, waits the TLSA TTL, reloads, waits again, then prunes
 - Persist in-progress rollovers and resume them after a reboot (`--resume`, `--schedule`)
