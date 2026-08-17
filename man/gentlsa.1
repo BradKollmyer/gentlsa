@@ -272,6 +272,12 @@ SMTP
 sends the connection's own source address as an RFC 5321
 .Sx 4.1.3
 address literal.
+For XMPP the stream's
+.Sy to=
+attribute and the TLS SNI are the zone, not the host connected to, as
+RFC 6120
+.Sx 4.7.2
+requires the XMPP domain there.
 .It Fl -info
 Print leaf-certificate details before the record.
 .It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google , Fl -azure

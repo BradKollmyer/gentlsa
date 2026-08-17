@@ -1041,7 +1041,7 @@ async fn generate(
     verbose::step(format_args!("generate {host}:{port}"));
     // An unreachable host must not abort the run: under --mx the other
     // exchanges are still worth publishing.
-    let cert = match fetch_live(&host, port, starttls) {
+    let cert = match fetch_live(&host, port, starttls, zone) {
         Ok(cert) => cert,
         Err(err) => {
             let message = format!("{err:#}");
@@ -1101,7 +1101,7 @@ async fn live_hash(
     starttls: Option<StarttlsProto>,
 ) -> Option<String> {
     let host = connect_host(zone, hostname);
-    let cert = fetch_live(&host, port, starttls).ok()?;
+    let cert = fetch_live(&host, port, starttls, zone).ok()?;
     cert.spki_sha256_hex().ok()
 }
 
@@ -1550,7 +1550,7 @@ async fn prune(
         publisher.map(PublisherKind::flag).unwrap_or("(none)")
     ));
     // As in generate: one unreachable exchange must not abort a --mx run.
-    let cert = match fetch_live(&host, port, starttls) {
+    let cert = match fetch_live(&host, port, starttls, zone_name) {
         Ok(cert) => cert,
         Err(err) => {
             let message = format!("{err:#}");
@@ -1752,7 +1752,7 @@ async fn verify(
         }
     };
 
-    let cert = match fetch_live(&host, port, starttls) {
+    let cert = match fetch_live(&host, port, starttls, zone) {
         Ok(cert) => cert,
         Err(err) => {
             eprintln!("{err:#}");

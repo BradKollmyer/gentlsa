@@ -233,7 +233,18 @@ fn tlsa_association_data(der: &[u8], selector: u8, matching: u8) -> Result<Strin
     })
 }
 
-pub fn fetch_live(host: &str, port: u16, starttls: Option<StarttlsProto>) -> Result<Certificate> {
+/// `domain` is the service domain (the zone gentlsa was asked about).
+///
+/// XMPP needs it: RFC 6120 §4.7.2 requires the initial stream's `to=` to be the
+/// XMPP domain, not the host a SRV record pointed at, and RFC 7673 §6 expects
+/// the certificate to match that same source domain — so it is also the SNI.
+/// Every other protocol uses the connect host for SNI (RFC 7672 §8.1 for SMTP).
+pub fn fetch_live(
+    host: &str,
+    port: u16,
+    starttls: Option<StarttlsProto>,
+    domain: &str,
+) -> Result<Certificate> {
     let _ = timeout::remaining()?;
     let proto = StarttlsProto::resolve(port, starttls);
     verbose::step(format_args!(
@@ -249,10 +260,18 @@ pub fn fetch_live(host: &str, port: u16, starttls: Option<StarttlsProto>) -> Res
             .with_context(|| format!("Exception: Connection error: IMAP STARTTLS {host}:{port}"))?,
         StarttlsProto::Pop3 => pop3_starttls(host, port)
             .with_context(|| format!("Exception: Connection error: POP3 STLS {host}:{port}"))?,
-        StarttlsProto::Xmpp => xmpp_starttls(host, port)
+        StarttlsProto::Xmpp => xmpp_starttls(host, port, domain)
             .with_context(|| format!("Exception: Connection error: XMPP STARTTLS {host}:{port}"))?,
     };
-    tls_peer_cert(stream, host)
+    let server_name = if proto == StarttlsProto::Xmpp {
+        domain
+    } else {
+        host
+    };
+    if server_name != host {
+        verbose::step(format_args!("TLS server name {server_name} (XMPP domain)"));
+    }
+    tls_peer_cert(stream, server_name)
         .with_context(|| format!("Exception: Connection error: TLS {host}:{port}"))
 }
 
@@ -445,18 +464,21 @@ fn pop3_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
     Ok(())
 }
 
-fn xmpp_starttls(host: &str, port: u16) -> Result<TcpStream> {
+fn xmpp_starttls(host: &str, port: u16, domain: &str) -> Result<TcpStream> {
     let mut stream = tcp_connect(host, port)?;
-    xmpp_negotiate(&mut stream, host, port)?;
+    xmpp_negotiate(&mut stream, domain, port)?;
     Ok(stream)
 }
 
-fn xmpp_negotiate(stream: &mut impl ReadWrite, host: &str, port: u16) -> Result<()> {
+/// `domain` is the XMPP domain for the `to=` attribute (RFC 6120 §4.7.2),
+/// which is the service domain and not necessarily the host connected to.
+fn xmpp_negotiate(stream: &mut impl ReadWrite, domain: &str, port: u16) -> Result<()> {
     let xmlns = StarttlsProto::Xmpp.xmpp_stream_ns(port);
+    verbose::step(format_args!("XMPP stream to={domain}"));
     let open = format!(
         "<?xml version='1.0'?><stream:stream xmlns='{xmlns}' \
          xmlns:stream='http://etherx.jabber.org/streams' to='{}' version='1.0'>",
-        xml_attr(host)
+        xml_attr(domain)
     );
     stream.write_all(open.as_bytes())?;
     stream.flush()?;
@@ -923,10 +945,17 @@ mod tests {
              <required/></starttls></stream:features>\
              <proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>",
         );
-        xmpp_negotiate(&mut stream, "xmpp.example.com", 5222).unwrap();
+        // RFC 6120 §4.7.2: `to=` is the XMPP domain, not the host that the SRV
+        // record pointed at. Sending the connect host makes servers that only
+        // service the domain answer <host-unknown/> and never send features.
+        xmpp_negotiate(&mut stream, "example.com", 5222).unwrap();
         let written = stream.written();
         assert!(written.contains("xmlns='jabber:client'"));
-        assert!(written.contains("to='xmpp.example.com'"));
+        assert!(written.contains("to='example.com'"));
+        assert!(
+            !written.contains("to='xmpp.example.com'"),
+            "the SRV target must not be used as the stream's to="
+        );
         assert!(written.contains("<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>"));
     }
 
