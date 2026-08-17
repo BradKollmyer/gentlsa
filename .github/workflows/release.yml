@@ -350,3 +350,12 @@ jobs:
     with:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
+
+  custom-build-pkg:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/build-pkg.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit

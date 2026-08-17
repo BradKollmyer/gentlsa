@@ -1,0 +1,61 @@
+name: Build FreeBSD pkg
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  pkg:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      PLAN: ${{ inputs.plan }}
+      CARGO_TERM_COLOR: always
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-freebsd
+
+      - name: Install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Cross-compile FreeBSD amd64
+        run: cargo zigbuild --release --locked --target x86_64-unknown-freebsd
+
+      - name: Build pkg
+        run: bash scripts/build-pkg.sh --from-bin target/x86_64-unknown-freebsd/release/gentlsa
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: artifacts-freebsd-packages
+          path: target/freebsd/*.pkg
+
+      - name: Attach package to the GitHub Release
+        if: ${{ !github.event.pull_request }}
+        run: |
+          tag="$(printf '%s' "$PLAN" | jq -r '.announcement_tag // empty')"
+          if [[ -z "$tag" || "$tag" == "null" ]]; then
+            echo "no announcement tag; skipping release upload"
+            exit 0
+          fi
+          gh release upload "$tag" \
+            target/freebsd/*.pkg \
+            --clobber --repo "${{ github.repository }}"

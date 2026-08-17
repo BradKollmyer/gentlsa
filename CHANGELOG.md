@@ -2,6 +2,7 @@
 
 ## 0.3.3 - 2026-08-16
 
+- Ship FreeBSD `.pkg` packages (`pkg add`) for amd64
 - Fix RPM architecture so `gentlsa.x86_64.rpm` is actually x86_64, not aarch64
 
 ## 0.3.2 - 2026-08-16
