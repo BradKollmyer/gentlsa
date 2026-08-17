@@ -4,7 +4,7 @@ use crate::cert::CertDetails;
 use crate::cloudflare::ListedTlsa;
 use crate::dns::TlsaRecord;
 use crate::nsupdate::ListedTlsa as NsupdateListed;
-use crate::publish::{PruneReport, PublishReport};
+use crate::publish::{ListedTlsa as ApiListed, PruneReport, PublishReport};
 use crate::tlsa;
 
 #[derive(Debug, Serialize)]
@@ -28,6 +28,10 @@ pub enum Report {
         cloudflare: Option<CloudflareList>,
         #[serde(skip_serializing_if = "Option::is_none")]
         nsupdate: Option<NsupdateList>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        route53: Option<ProviderList>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        google: Option<ProviderList>,
         #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,6 +62,20 @@ pub enum Report {
         algorithm: String,
         ttl: u32,
     },
+    Route53 {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        zones: Option<Vec<ZoneRef>>,
+    },
+    Google {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        zones: Option<Vec<ZoneRef>>,
+    },
     File {
         path: String,
         usage: u8,
@@ -71,6 +89,10 @@ pub enum Report {
         cloudflare: Vec<PublishReport>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         nsupdate: Vec<PublishReport>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        route53: Vec<PublishReport>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        google: Vec<PublishReport>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -91,6 +113,10 @@ pub struct GenerateResult {
     pub cloudflare: Option<PublishReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsupdate: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route53: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google: Option<PublishReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -124,6 +150,12 @@ pub struct NsupdateList {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProviderList {
+    pub zone: String,
+    pub records: Vec<JsonTlsa>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct JsonTlsa {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -153,6 +185,10 @@ pub struct PruneResult {
     pub cloudflare: Option<PruneReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsupdate: Option<PruneReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route53: Option<PruneReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google: Option<PruneReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -265,6 +301,24 @@ impl JsonTlsa {
             ),
         )
     }
+
+    pub fn from_listed(record: &ApiListed, live: Option<&str>) -> Self {
+        Self::from_fields(
+            record.id.clone(),
+            Some(record.name.clone()),
+            record.usage,
+            record.selector,
+            record.matching,
+            record.certificate.clone(),
+            tlsa::hash_status(
+                live,
+                record.usage,
+                record.selector,
+                record.matching,
+                &record.certificate,
+            ),
+        )
+    }
 }
 
 impl GenerateResult {
@@ -286,6 +340,8 @@ impl GenerateResult {
             info,
             cloudflare: None,
             nsupdate: None,
+            route53: None,
+            google: None,
             error: None,
         }
     }
@@ -364,6 +420,8 @@ mod tests {
             }],
             cloudflare: Vec::new(),
             nsupdate: Vec::new(),
+            route53: Vec::new(),
+            google: Vec::new(),
             error: None,
         };
         let value = serde_json::to_value(&report).unwrap();

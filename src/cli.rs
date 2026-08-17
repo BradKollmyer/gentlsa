@@ -38,6 +38,40 @@ impl FromStr for Ports {
     }
 }
 
+/// Mutually exclusive publisher flags shared by generate/list/prune/file.
+#[derive(Debug, Clone, Copy, Default, clap::Args)]
+pub struct PublisherFlags {
+    /// Publish / list / prune via the Cloudflare API
+    #[arg(long, group = "publisher")]
+    pub cloudflare: bool,
+    /// Publish via RFC 2136 dynamic update (TSIG)
+    #[arg(long, group = "publisher")]
+    pub nsupdate: bool,
+    /// Publish / list / prune via Amazon Route 53
+    #[arg(long, group = "publisher")]
+    pub route53: bool,
+    /// Publish / list / prune via Google Cloud DNS
+    #[arg(long, group = "publisher")]
+    pub google: bool,
+}
+
+impl PublisherFlags {
+    pub fn kind(self) -> Option<crate::publish::PublisherKind> {
+        use crate::publish::PublisherKind;
+        if self.cloudflare {
+            Some(PublisherKind::Cloudflare)
+        } else if self.nsupdate {
+            Some(PublisherKind::Nsupdate)
+        } else if self.route53 {
+            Some(PublisherKind::Route53)
+        } else if self.google {
+            Some(PublisherKind::Google)
+        } else {
+            None
+        }
+    }
+}
+
 /// Tool for TLSA/DANE
 #[derive(Debug, Parser)]
 #[command(
@@ -73,20 +107,16 @@ pub enum Command {
         /// Print certificate details
         #[arg(long)]
         info: bool,
-        /// Publish the TLSA hash in Cloudflare (adds the new hash, keeps any old one)
-        #[arg(long, conflicts_with = "nsupdate")]
-        cloudflare: bool,
-        /// Publish via RFC 2136 dynamic update (TSIG)
-        #[arg(long, conflicts_with = "cloudflare")]
-        nsupdate: bool,
-        /// With --cloudflare or --nsupdate, overwrite the existing TLSA instead of adding a rollover record
+        #[command(flatten)]
+        publisher: PublisherFlags,
+        /// With a publisher, overwrite the existing TLSA instead of adding a rollover record
         #[arg(long)]
         replace: bool,
-        /// With --cloudflare or --nsupdate, print the action but do not write records
+        /// With a publisher, print the action but do not write records
         #[arg(long)]
         dryrun: bool,
     },
-    /// List published TLSA records from DNS (and optionally Cloudflare)
+    /// List published TLSA records from DNS (and optionally a publisher)
     List {
         zone: String,
         /// Service port or comma-separated list. Omit to include every port.
@@ -94,12 +124,8 @@ pub enum Command {
         ports: Option<Ports>,
         #[arg(long)]
         hostname: Option<String>,
-        /// Also list TLSA records from Cloudflare
-        #[arg(long, conflicts_with = "nsupdate")]
-        cloudflare: bool,
-        /// Also list TLSA records from the configured primary (RFC 2136 / AXFR)
-        #[arg(long, conflicts_with = "cloudflare")]
-        nsupdate: bool,
+        #[command(flatten)]
+        publisher: PublisherFlags,
         /// Compare listed hashes to the live certificate
         #[arg(long)]
         info: bool,
@@ -112,12 +138,8 @@ pub enum Command {
         ports: Ports,
         #[arg(long)]
         hostname: Option<String>,
-        /// Delete stale records in Cloudflare
-        #[arg(long, conflicts_with = "nsupdate")]
-        cloudflare: bool,
-        /// Delete stale records via RFC 2136 dynamic update (TSIG)
-        #[arg(long, conflicts_with = "cloudflare")]
-        nsupdate: bool,
+        #[command(flatten)]
+        publisher: PublisherFlags,
         #[arg(long)]
         dryrun: bool,
     },
@@ -147,10 +169,28 @@ pub enum Command {
         #[arg(long)]
         info: bool,
     },
+    /// Amazon Route 53 helpers
+    Route53 {
+        /// Print Route 53 authentication status
+        #[arg(long)]
+        info: bool,
+        /// List hosted zones available to the configured account
+        #[arg(long)]
+        listzones: bool,
+    },
+    /// Google Cloud DNS helpers
+    Google {
+        /// Print Google Cloud DNS authentication status
+        #[arg(long)]
+        info: bool,
+        /// List managed zones in the configured project
+        #[arg(long)]
+        listzones: bool,
+    },
     /// Show TLSA info for a local certificate file
     File {
         certfile: PathBuf,
-        /// Zone to publish into when using --cloudflare or --nsupdate
+        /// Zone to publish into when using a publisher flag
         #[arg(long)]
         zone: Option<String>,
         #[arg(long)]
@@ -161,12 +201,8 @@ pub enum Command {
         /// Print certificate details (on by default for this command)
         #[arg(long, default_value_t = true)]
         info: bool,
-        /// Publish this certificate's hash in Cloudflare (key rollover)
-        #[arg(long, conflicts_with = "nsupdate")]
-        cloudflare: bool,
-        /// Publish this certificate's hash via RFC 2136 dynamic update (TSIG)
-        #[arg(long, conflicts_with = "cloudflare")]
-        nsupdate: bool,
+        #[command(flatten)]
+        publisher: PublisherFlags,
         #[arg(long)]
         replace: bool,
         #[arg(long)]
@@ -272,17 +308,37 @@ mod tests {
         .unwrap();
         match cli.command {
             Command::Generate {
-                nsupdate,
+                publisher,
                 replace,
                 dryrun,
-                cloudflare,
                 ..
             } => {
-                assert!(nsupdate);
+                assert!(publisher.nsupdate);
                 assert!(replace);
                 assert!(dryrun);
-                assert!(!cloudflare);
+                assert!(!publisher.cloudflare);
             }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_hosted_publishers_conflict() {
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "generate",
+                "example.com",
+                "443",
+                "--route53",
+                "--google"
+            ])
+            .is_err()
+        );
+        let cli =
+            Cli::try_parse_from(["gentlsa", "list", "example.com", "--route53"]).unwrap();
+        match cli.command {
+            Command::List { publisher, .. } => assert!(publisher.route53),
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -292,6 +348,27 @@ mod tests {
         let cli = Cli::try_parse_from(["gentlsa", "nsupdate", "--info"]).unwrap();
         match cli.command {
             Command::Nsupdate { info } => assert!(info),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_route53_and_google_subcommands() {
+        let cli = Cli::try_parse_from(["gentlsa", "route53", "--info", "--listzones"]).unwrap();
+        match cli.command {
+            Command::Route53 { info, listzones } => {
+                assert!(info);
+                assert!(listzones);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["gentlsa", "google", "--listzones"]).unwrap();
+        match cli.command {
+            Command::Google { info, listzones } => {
+                assert!(!info);
+                assert!(listzones);
+            }
             other => panic!("unexpected {other:?}"),
         }
     }

@@ -79,18 +79,20 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare|--nsupdate] [--replace] [--dryrun]
-gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare|--nsupdate] [--info]
-gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate] [--dryrun]
+gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare|--nsupdate|--route53|--google] [--replace] [--dryrun]
+gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--info]
+gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--dryrun]
 gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
 gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] nsupdate [--info]
-gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare|--nsupdate]
+gentlsa [-v|--verbose] [--json] route53 [--info] [--listzones]
+gentlsa [-v|--verbose] [--json] google [--info] [--listzones]
+gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare|--nsupdate|--route53|--google]
 ```
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
 
-`-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, Cloudflare API). Regular output stays on stdout, so `verify` remains Nagios-safe.
+`-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, publisher APIs). Regular output stays on stdout, so `verify` remains Nagios-safe.
 
 `--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `2` / `3`) and puts the OK/ERROR/UNKNOWN result in `status`, `message`, and `exit`.
 
@@ -155,7 +157,7 @@ SMTP STARTTLS example (connects to `smtp.gmail.com:587`):
 $ gentlsa generate gmail.com 587 --hostname smtp --info
 ```
 
-`--cloudflare` or `--nsupdate` publishes the live hash. If a TLSA record already exists, the new hash is **added** and the old one is kept (DANE key rollover). Use `--replace` to overwrite instead. `--dryrun` shows the action without writing. The two publishers are mutually exclusive.
+`--cloudflare`, `--nsupdate`, `--route53`, or `--google` publishes the live hash. If a TLSA record already exists, the new hash is **added** and the old one is kept (DANE key rollover). Use `--replace` to overwrite instead. `--dryrun` shows the action without writing. The publishers are mutually exclusive.
 
 ```
 $ gentlsa generate example.com 443 --cloudflare --info
@@ -181,7 +183,7 @@ OK - TLSA is valid
 
 ### list
 
-Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--nsupdate` queries the configured primary (or AXFR when `PORTS` is omitted). `--info` fetches the live certificate and marks each `3 1 1` hash current or stale. Other usage/selector/matching values are listed with their RFC 7218 names and are not compared to the live key. Omit `PORTS` to include every port (Cloudflare and AXFR can list the whole zone; public DNS is queried for each name found there).
+Show TLSA records from DNS. `--cloudflare`, `--route53`, and `--google` also print what that provider has. `--nsupdate` queries the configured primary (or AXFR when `PORTS` is omitted). `--info` fetches the live certificate and marks each `3 1 1` hash current or stale. Other usage/selector/matching values are listed with their RFC 7218 names and are not compared to the live key. Omit `PORTS` to include every port (Cloudflare, Route 53, Google, and AXFR can list the whole zone; public DNS is queried for each name found there).
 
 ```
 $ gentlsa list example.com 443
@@ -204,7 +206,7 @@ $ gentlsa prune example.com 443 --cloudflare
 
 ### file
 
-Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name. With `--cloudflare` or `--nsupdate` (and `--zone --port`), publish that file's hash before you reload the service:
+Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name. With a publisher flag (and `--zone --port`), publish that file's hash before you reload the service:
 
 ```
 $ gentlsa file /etc/ssl/certs/example.pem --port 443
@@ -231,7 +233,7 @@ Safer sequence:
 2. Publish the **new** hash next to the old one:
    ```
    gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --port 443 --cloudflare
-   # or: --nsupdate
+   # or: --nsupdate / --route53 / --google
    ```
 3. Wait at least as long as the TLSA TTL (and any resolver cache).
 4. Reload the service so it presents the new certificate.
@@ -333,6 +335,65 @@ $ gentlsa prune example.com 443 --nsupdate --dryrun
 `list --nsupdate` without ports tries AXFR. If the key is not allowed to transfer the zone, pass the ports instead.
 
 The nameserver must allow UPDATE (and AXFR, if you want port-less `list`) for that TSIG key on the zone.
+
+## Route 53
+
+`--route53` publishes TLSA through the Amazon Route 53 REST API (SigV4). Create `/etc/gentlsa/route53.cfg` (or `~/.gentlsa/route53.cfg`):
+
+```
+[Route53]
+access_key = AKIA...
+secret_key = ...
+ttl = 3600
+```
+
+`session_token` is accepted for temporary credentials. Environment variables override the config file:
+
+| Variable | Use |
+|----------|-----|
+| `AWS_ACCESS_KEY_ID` or `GENTLSA_AWS_ACCESS_KEY_ID` | Access key |
+| `AWS_SECRET_ACCESS_KEY` or `GENTLSA_AWS_SECRET_ACCESS_KEY` | Secret key |
+| `AWS_SESSION_TOKEN` or `GENTLSA_AWS_SESSION_TOKEN` | Session token (optional) |
+
+The IAM principal needs `route53:ListHostedZones`, `route53:ListResourceRecordSets`, and `route53:ChangeResourceRecordSets` on the hosted zones you publish to.
+
+```
+$ gentlsa route53 --listzones
+$ gentlsa route53 --info
+$ gentlsa generate example.com 443 --route53 --dryrun
+$ gentlsa list example.com 443 --route53 --info
+$ gentlsa prune example.com 443 --route53 --dryrun
+```
+
+## Google Cloud DNS
+
+`--google` publishes TLSA through the Cloud DNS REST API. Point `GOOGLE_APPLICATION_CREDENTIALS` at a service-account JSON key, or create `/etc/gentlsa/google.cfg` (or `~/.gentlsa/google.cfg`):
+
+```
+[Google]
+credentials = /etc/gentlsa/google-sa.json
+project = my-gcp-project
+ttl = 3600
+```
+
+The project can also come from `project_id` in the service-account JSON.
+
+| Variable | Use |
+|----------|-----|
+| `GOOGLE_APPLICATION_CREDENTIALS` or `GENTLSA_GOOGLE_CREDENTIALS` | Path to service-account JSON |
+| `GENTLSA_GOOGLE_PROJECT`, `GOOGLE_CLOUD_PROJECT`, or `GCLOUD_PROJECT` | GCP project |
+
+The service account needs `dns.managedZones.list`, `dns.resourceRecordSets.list`, and `dns.changes.create` (DNS Administrator, or a custom role with those permissions).
+
+```
+$ gentlsa google --listzones
+$ gentlsa google --info
+$ gentlsa generate example.com 443 --google --dryrun
+$ gentlsa list example.com 443 --google --info
+$ gentlsa prune example.com 443 --google --dryrun
+```
+
+DigitalOcean DNS is not supported: the official API has no TLSA record type and no DNSSEC.
 
 ## Development
 

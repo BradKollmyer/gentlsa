@@ -2,10 +2,12 @@ mod cert;
 mod cli;
 mod cloudflare;
 mod dns;
+mod google;
 mod nsupdate;
 mod output;
 mod publish;
 mod report;
+mod route53;
 mod tlsa;
 mod verbose;
 
@@ -16,13 +18,16 @@ use clap::Parser;
 
 use crate::cert::{CertDetails, Certificate, fetch_live};
 use crate::cli::{Cli, Command};
+use crate::cli::PublisherFlags;
 use crate::cloudflare::Client as Cloudflare;
+use crate::google::Client as Google;
 use crate::nsupdate::Config as Nsupdate;
-use crate::publish::{PublishMode, PublishReport};
+use crate::publish::{PublishMode, PublishReport, PublisherKind};
 use crate::report::{
     CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, NsupdateList,
-    PruneResult, Report, VerifyResult, ZoneRef, verify_outcome, worst_verify_exit,
+    ProviderList, PruneResult, Report, VerifyResult, ZoneRef, verify_outcome, worst_verify_exit,
 };
+use crate::route53::Client as Route53;
 use crate::tlsa::{connect_host, fqdn};
 
 #[tokio::main]
@@ -52,18 +57,11 @@ async fn run() -> Result<u8> {
             ports,
             hostname,
             info,
-            cloudflare,
-            nsupdate,
+            publisher,
             replace,
             dryrun,
         } => {
-            let publisher = PublisherOpts {
-                cloudflare,
-                nsupdate,
-                replace,
-                dryrun,
-            };
-            publisher.require_replace()?;
+            let publisher = PublisherOpts::from_flags(publisher, replace, dryrun)?;
             let mut code = 0;
             let mut results = Vec::new();
             for port in ports.as_slice() {
@@ -85,16 +83,14 @@ async fn run() -> Result<u8> {
             zone,
             ports,
             hostname,
-            cloudflare,
-            nsupdate,
+            publisher,
             info,
         } => {
             list(
                 &zone,
                 ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]),
                 hostname.as_deref(),
-                cloudflare,
-                nsupdate,
+                publisher.kind(),
                 info,
             )
             .await
@@ -103,8 +99,7 @@ async fn run() -> Result<u8> {
             zone,
             ports,
             hostname,
-            cloudflare,
-            nsupdate,
+            publisher,
             dryrun,
         } => {
             let mut code = 0;
@@ -114,8 +109,7 @@ async fn run() -> Result<u8> {
                     &zone,
                     *port,
                     hostname.as_deref(),
-                    cloudflare,
-                    nsupdate,
+                    publisher.kind(),
                     dryrun,
                 )
                 .await?;
@@ -156,24 +150,19 @@ async fn run() -> Result<u8> {
         }
         Command::Cloudflare { info, listzones } => cloudflare_cmd(info, listzones).await,
         Command::Nsupdate { info } => nsupdate_cmd(info).await,
+        Command::Route53 { info, listzones } => route53_cmd(info, listzones).await,
+        Command::Google { info, listzones } => google_cmd(info, listzones).await,
         Command::File {
             certfile,
             zone,
             hostname,
             ports,
             info,
-            cloudflare,
-            nsupdate,
+            publisher,
             replace,
             dryrun,
         } => {
-            let publisher = PublisherOpts {
-                cloudflare,
-                nsupdate,
-                replace,
-                dryrun,
-            };
-            publisher.require_replace()?;
+            let publisher = PublisherOpts::from_flags(publisher, replace, dryrun)?;
             let ports = ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]);
             verbose::step(format_args!("file {}", certfile.display()));
             let cert = Certificate::from_file(&certfile)?;
@@ -182,55 +171,33 @@ async fn run() -> Result<u8> {
             }
 
             let mut code = 0;
-            let mut cf_reports = Vec::new();
-            let mut ns_reports = Vec::new();
+            let mut reports = PublisherReports::default();
             let mut error = None;
-            if publisher.active() {
-                let zone = zone.as_deref().with_context(|| {
-                    if publisher.nsupdate {
-                        "--zone is required with --nsupdate"
-                    } else {
-                        "--zone is required with --cloudflare"
-                    }
-                })?;
+            if let Some(kind) = publisher.kind {
+                let zone = zone
+                    .as_deref()
+                    .with_context(|| format!("--zone is required with {}", kind.flag()))?;
                 if ports.is_empty() {
-                    anyhow::bail!(if publisher.nsupdate {
-                        "--port is required with --nsupdate"
-                    } else {
-                        "--port is required with --cloudflare"
-                    });
+                    anyhow::bail!("--port is required with {}", kind.flag());
                 }
                 for port in ports {
-                    if publisher.cloudflare {
-                        match update_cloudflare(
-                            zone,
-                            hostname.as_deref(),
-                            *port,
-                            &cert,
-                            info,
-                            publisher,
-                        )
-                        .await?
-                        {
-                            UpdateCf::Published(report) => cf_reports.push(report),
-                            UpdateCf::NotManaged => {
-                                error = Some("not_managed_by_cloudflare".into());
-                                code = 1;
-                                break;
-                            }
+                    match publish_cert(
+                        kind,
+                        zone,
+                        hostname.as_deref(),
+                        *port,
+                        &cert,
+                        info,
+                        publisher,
+                    )
+                    .await?
+                    {
+                        PublishOutcome::Published(report) => reports.push(kind, report),
+                        PublishOutcome::NotManaged(code_name) => {
+                            error = Some(code_name.into());
+                            code = 1;
+                            break;
                         }
-                    } else {
-                        ns_reports.push(
-                            update_nsupdate(
-                                zone,
-                                hostname.as_deref(),
-                                *port,
-                                &cert,
-                                info,
-                                publisher,
-                            )
-                            .await?,
-                        );
                     }
                 }
             }
@@ -252,8 +219,10 @@ async fn run() -> Result<u8> {
                             owner: tlsa::owner_name(*port, hostname.as_deref()),
                         })
                         .collect(),
-                    cloudflare: cf_reports,
-                    nsupdate: ns_reports,
+                    cloudflare: reports.cloudflare,
+                    nsupdate: reports.nsupdate,
+                    route53: reports.route53,
+                    google: reports.google,
                     error,
                 })?;
             }
@@ -264,23 +233,49 @@ async fn run() -> Result<u8> {
 
 #[derive(Clone, Copy)]
 struct PublisherOpts {
-    cloudflare: bool,
-    nsupdate: bool,
+    kind: Option<PublisherKind>,
     replace: bool,
     dryrun: bool,
 }
 
 impl PublisherOpts {
-    fn active(self) -> bool {
-        self.cloudflare || self.nsupdate
-    }
-
-    fn require_replace(self) -> Result<()> {
-        if self.replace && !self.active() {
-            anyhow::bail!("--replace requires --cloudflare or --nsupdate");
+    fn from_flags(flags: PublisherFlags, replace: bool, dryrun: bool) -> Result<Self> {
+        let opts = Self {
+            kind: flags.kind(),
+            replace,
+            dryrun,
+        };
+        if opts.replace && opts.kind.is_none() {
+            anyhow::bail!(
+                "--replace requires --cloudflare, --nsupdate, --route53, or --google"
+            );
         }
-        Ok(())
+        Ok(opts)
     }
+}
+
+#[derive(Default)]
+struct PublisherReports {
+    cloudflare: Vec<PublishReport>,
+    nsupdate: Vec<PublishReport>,
+    route53: Vec<PublishReport>,
+    google: Vec<PublishReport>,
+}
+
+impl PublisherReports {
+    fn push(&mut self, kind: PublisherKind, report: PublishReport) {
+        match kind {
+            PublisherKind::Cloudflare => self.cloudflare.push(report),
+            PublisherKind::Nsupdate => self.nsupdate.push(report),
+            PublisherKind::Route53 => self.route53.push(report),
+            PublisherKind::Google => self.google.push(report),
+        }
+    }
+}
+
+enum PublishOutcome {
+    Published(PublishReport),
+    NotManaged(&'static str),
 }
 
 async fn generate(
@@ -305,23 +300,21 @@ async fn generate(
         if info { Some(cert.details()?) } else { None },
     );
 
-    if publisher.nsupdate {
-        result.nsupdate =
-            Some(update_nsupdate(zone, hostname, port, &cert, info, publisher).await?);
+    let Some(kind) = publisher.kind else {
         return Ok((0, result));
-    }
-
-    if !publisher.cloudflare {
-        return Ok((0, result));
-    }
-
-    match update_cloudflare(zone, hostname, port, &cert, info, publisher).await? {
-        UpdateCf::Published(report) => {
-            result.cloudflare = Some(report);
+    };
+    match publish_cert(kind, zone, hostname, port, &cert, info, publisher).await? {
+        PublishOutcome::Published(report) => {
+            match kind {
+                PublisherKind::Cloudflare => result.cloudflare = Some(report),
+                PublisherKind::Nsupdate => result.nsupdate = Some(report),
+                PublisherKind::Route53 => result.route53 = Some(report),
+                PublisherKind::Google => result.google = Some(report),
+            }
             Ok((0, result))
         }
-        UpdateCf::NotManaged => {
-            result.error = Some("not_managed_by_cloudflare".into());
+        PublishOutcome::NotManaged(code) => {
+            result.error = Some(code.into());
             Ok((1, result))
         }
     }
@@ -345,8 +338,7 @@ async fn list(
     zone_name: &str,
     ports: &[u16],
     hostname: Option<&str>,
-    use_cloudflare: bool,
-    use_nsupdate: bool,
+    publisher: Option<PublisherKind>,
     info: bool,
 ) -> Result<u8> {
     let ports_label = if ports.is_empty() {
@@ -359,45 +351,73 @@ async fn list(
             .join(",")
     };
     verbose::step(format_args!(
-        "list {zone_name} ports={ports_label} hostname={} cloudflare={use_cloudflare} nsupdate={use_nsupdate} info={info}",
-        hostname.unwrap_or("(none)")
+        "list {zone_name} ports={ports_label} hostname={} publisher={} info={info}",
+        hostname.unwrap_or("(none)"),
+        publisher.map(PublisherKind::flag).unwrap_or("(none)")
     ));
 
     let mut error = None;
-    let cf_listed = if use_cloudflare {
-        let cf = Cloudflare::from_env_or_config()
-            .context("Please install/configure Cloudflare credentials for this to work.")?;
-        let Some(zone) = cf.zone_by_name(zone_name).await? else {
-            output::text("Not managed by cloudflare. Bailing.");
-            error = Some("not_managed_by_cloudflare".into());
-            if output::is_json() {
-                output::emit(&Report::List {
-                    zone: zone_name.to_string(),
-                    hostname: hostname.map(str::to_string),
-                    ports: ports.to_vec(),
-                    live: Vec::new(),
-                    dns: Vec::new(),
-                    cloudflare: None,
-                    nsupdate: None,
-                    note: None,
-                    error,
-                })?;
-            }
-            return Ok(1);
-        };
-        let records = cf.list_tlsa(&zone, hostname, ports).await?;
-        Some((zone.name, records))
-    } else {
-        None
-    };
-
-    let ns_listed = if use_nsupdate {
-        let ns = Nsupdate::from_env_or_config()
-            .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
-        let (records, axfr_note) = ns.list_tlsa(zone_name, hostname, ports).await?;
-        Some((ns.server_label(), records, axfr_note))
-    } else {
-        None
+    let listed = match publisher {
+        Some(PublisherKind::Cloudflare) => {
+            let cf = Cloudflare::from_env_or_config()
+                .context("Please install/configure Cloudflare credentials for this to work.")?;
+            let Some(zone) = cf.zone_by_name(zone_name).await? else {
+                output::text("Not managed by cloudflare. Bailing.");
+                error = Some("not_managed_by_cloudflare".into());
+                if output::is_json() {
+                    emit_empty_list(zone_name, hostname, ports, error.clone())?;
+                }
+                return Ok(1);
+            };
+            let records = cf.list_tlsa(&zone, hostname, ports).await?;
+            Some(ListedSource::Cloudflare {
+                zone: zone.name,
+                records,
+            })
+        }
+        Some(PublisherKind::Nsupdate) => {
+            let ns = Nsupdate::from_env_or_config()
+                .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
+            let (records, axfr_note) = ns.list_tlsa(zone_name, hostname, ports).await?;
+            Some(ListedSource::Nsupdate {
+                server: ns.server_label(),
+                records,
+                note: axfr_note,
+            })
+        }
+        Some(PublisherKind::Route53) => {
+            let r53 = Route53::from_env_or_config()
+                .context("Please configure Route 53 in /etc/gentlsa/route53.cfg")?;
+            let Some(zone) = r53.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Route 53. Bailing.");
+                error = Some("not_managed_by_route53".into());
+                if output::is_json() {
+                    emit_empty_list(zone_name, hostname, ports, error.clone())?;
+                }
+                return Ok(1);
+            };
+            Some(ListedSource::Route53 {
+                zone: zone.name.clone(),
+                records: r53.list_tlsa(&zone, hostname, ports).await?,
+            })
+        }
+        Some(PublisherKind::Google) => {
+            let gcloud = Google::from_env_or_config()
+                .context("Please configure Google Cloud DNS in /etc/gentlsa/google.cfg")?;
+            let Some(zone) = gcloud.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Google Cloud DNS. Bailing.");
+                error = Some("not_managed_by_google".into());
+                if output::is_json() {
+                    emit_empty_list(zone_name, hostname, ports, error.clone())?;
+                }
+                return Ok(1);
+            };
+            Some(ListedSource::Google {
+                zone: zone.dns_name.clone(),
+                records: gcloud.list_tlsa(&zone, hostname, ports).await?,
+            })
+        }
+        None => None,
     };
 
     let dns_names = if !ports.is_empty() {
@@ -405,10 +425,8 @@ async fn list(
             .iter()
             .map(|port| fqdn(zone_name, *port, hostname))
             .collect()
-    } else if let Some((_, records)) = &cf_listed {
-        unique_names(records.iter().map(|record| record.name.clone()))
-    } else if let Some((_, records, _)) = &ns_listed {
-        unique_names(records.iter().map(|record| record.name.clone()))
+    } else if let Some(listed) = &listed {
+        unique_names(listed.names())
     } else {
         Vec::new()
     };
@@ -434,12 +452,11 @@ async fn list(
         std::collections::BTreeMap::new()
     };
 
-    let note =
-        if ports.is_empty() && dns_names.is_empty() && cf_listed.is_none() && ns_listed.is_none() {
-            Some("no port specified; pass 443 or 25,465 to query public DNS".to_string())
-        } else {
-            None
-        };
+    let note = if ports.is_empty() && dns_names.is_empty() && listed.is_none() {
+        Some("no port specified; pass 443 or 25,465 to query public DNS".to_string())
+    } else {
+        None
+    };
 
     let mut dns = Vec::new();
     if note.is_none() && !dns_names.is_empty() {
@@ -471,34 +488,52 @@ async fn list(
         }
     }
 
-    let cloudflare = cf_listed.as_ref().map(|(zone, records)| CloudflareList {
-        zone: zone.clone(),
-        records: records
-            .iter()
-            .map(|record| {
-                let live = tlsa::port_from_owner(&record.name)
-                    .and_then(|port| live_by_port.get(&port))
-                    .map(String::as_str);
-                JsonTlsa::from_cf(record, live)
-            })
-            .collect(),
-    });
-
-    let nsupdate = ns_listed
-        .as_ref()
-        .map(|(server, records, axfr_note)| NsupdateList {
-            server: server.clone(),
-            records: records
-                .iter()
-                .map(|record| {
-                    let live = tlsa::port_from_owner(&record.name)
-                        .and_then(|port| live_by_port.get(&port))
-                        .map(String::as_str);
-                    JsonTlsa::from_nsupdate(record, live)
-                })
-                .collect(),
-            note: axfr_note.clone(),
-        });
+    let mut cloudflare = None;
+    let mut nsupdate = None;
+    let mut route53 = None;
+    let mut google = None;
+    match &listed {
+        Some(ListedSource::Cloudflare { zone, records }) => {
+            cloudflare = Some(CloudflareList {
+                zone: zone.clone(),
+                records: records
+                    .iter()
+                    .map(|record| {
+                        let live = tlsa::port_from_owner(&record.name)
+                            .and_then(|port| live_by_port.get(&port))
+                            .map(String::as_str);
+                        JsonTlsa::from_cf(record, live)
+                    })
+                    .collect(),
+            });
+        }
+        Some(ListedSource::Nsupdate {
+            server,
+            records,
+            note,
+        }) => {
+            nsupdate = Some(NsupdateList {
+                server: server.clone(),
+                records: records
+                    .iter()
+                    .map(|record| {
+                        let live = tlsa::port_from_owner(&record.name)
+                            .and_then(|port| live_by_port.get(&port))
+                            .map(String::as_str);
+                        JsonTlsa::from_nsupdate(record, live)
+                    })
+                    .collect(),
+                note: note.clone(),
+            });
+        }
+        Some(ListedSource::Route53 { zone, records }) => {
+            route53 = Some(json_provider_list(zone, records, &live_by_port));
+        }
+        Some(ListedSource::Google { zone, records }) => {
+            google = Some(json_provider_list(zone, records, &live_by_port));
+        }
+        None => {}
+    }
 
     if output::is_json() {
         output::emit(&Report::List {
@@ -515,6 +550,8 @@ async fn list(
             dns,
             cloudflare,
             nsupdate,
+            route53,
+            google,
             note,
             error,
         })?;
@@ -583,7 +620,106 @@ async fn list(
             }
         }
     }
+
+    if let Some(r53) = &route53 {
+        print_provider_list("Route 53", r53);
+    }
+    if let Some(gcloud) = &google {
+        print_provider_list("Google Cloud DNS", gcloud);
+    }
     Ok(0)
+}
+
+enum ListedSource {
+    Cloudflare {
+        zone: String,
+        records: Vec<cloudflare::ListedTlsa>,
+    },
+    Nsupdate {
+        server: String,
+        records: Vec<nsupdate::ListedTlsa>,
+        note: Option<String>,
+    },
+    Route53 {
+        zone: String,
+        records: Vec<publish::ListedTlsa>,
+    },
+    Google {
+        zone: String,
+        records: Vec<publish::ListedTlsa>,
+    },
+}
+
+impl ListedSource {
+    fn names(&self) -> Vec<String> {
+        match self {
+            Self::Cloudflare { records, .. } => {
+                records.iter().map(|record| record.name.clone()).collect()
+            }
+            Self::Nsupdate { records, .. } => {
+                records.iter().map(|record| record.name.clone()).collect()
+            }
+            Self::Route53 { records, .. } | Self::Google { records, .. } => {
+                records.iter().map(|record| record.name.clone()).collect()
+            }
+        }
+    }
+}
+
+fn json_provider_list(
+    zone: &str,
+    records: &[publish::ListedTlsa],
+    live_by_port: &std::collections::BTreeMap<u16, String>,
+) -> ProviderList {
+    ProviderList {
+        zone: zone.trim_end_matches('.').to_string(),
+        records: records
+            .iter()
+            .map(|record| {
+                let live = tlsa::port_from_owner(&record.name)
+                    .and_then(|port| live_by_port.get(&port))
+                    .map(String::as_str);
+                JsonTlsa::from_listed(record, live)
+            })
+            .collect(),
+    }
+}
+
+fn print_provider_list(label: &str, list: &ProviderList) {
+    println!(">>> {label} {}", list.zone);
+    if list.records.is_empty() {
+        println!("(none)");
+        return;
+    }
+    for record in &list.records {
+        println!(
+            "{}  {}{}",
+            record.name.as_deref().unwrap_or("-"),
+            record.to_text(),
+            status_tag(record.status)
+        );
+    }
+}
+
+fn emit_empty_list(
+    zone: &str,
+    hostname: Option<&str>,
+    ports: &[u16],
+    error: Option<String>,
+) -> Result<()> {
+    output::emit(&Report::List {
+        zone: zone.to_string(),
+        hostname: hostname.map(str::to_string),
+        ports: ports.to_vec(),
+        live: Vec::new(),
+        dns: Vec::new(),
+        cloudflare: None,
+        nsupdate: None,
+        route53: None,
+        google: None,
+        note: None,
+        error,
+    })
 }
 
 fn unique_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -603,13 +739,13 @@ async fn prune(
     zone_name: &str,
     port: u16,
     hostname: Option<&str>,
-    use_cloudflare: bool,
-    use_nsupdate: bool,
+    publisher: Option<PublisherKind>,
     dryrun: bool,
 ) -> Result<(u8, PruneResult)> {
     let host = connect_host(zone_name, hostname);
     verbose::step(format_args!(
-        "prune {host}:{port} cloudflare={use_cloudflare} nsupdate={use_nsupdate} dryrun={dryrun}"
+        "prune {host}:{port} publisher={} dryrun={dryrun}",
+        publisher.map(PublisherKind::flag).unwrap_or("(none)")
     ));
     let cert = fetch_live(&host, port)?;
     let live_hash = cert.spki_sha256_hex()?;
@@ -646,34 +782,62 @@ async fn prune(
         dns: dns_records,
         cloudflare: None,
         nsupdate: None,
+        route53: None,
+        google: None,
         error: None,
     };
 
-    if use_nsupdate {
-        let ns = Nsupdate::from_env_or_config()
-            .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
-        result.nsupdate = Some(
-            ns.prune_tlsa(zone_name, hostname, port, &live_hash, dryrun)
-                .await?,
-        );
-        return Ok((0, result));
+    match publisher {
+        Some(PublisherKind::Nsupdate) => {
+            let ns = Nsupdate::from_env_or_config()
+                .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
+            result.nsupdate = Some(
+                ns.prune_tlsa(zone_name, hostname, port, &live_hash, dryrun)
+                    .await?,
+            );
+        }
+        Some(PublisherKind::Cloudflare) => {
+            let cf = Cloudflare::from_env_or_config()
+                .context("Please install/configure Cloudflare credentials for this to work.")?;
+            let Some(zone) = cf.zone_by_name(zone_name).await? else {
+                output::text("Not managed by cloudflare. Bailing.");
+                result.error = Some("not_managed_by_cloudflare".into());
+                return Ok((1, result));
+            };
+            result.cloudflare = Some(
+                cf.prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
+                    .await?,
+            );
+        }
+        Some(PublisherKind::Route53) => {
+            let r53 = Route53::from_env_or_config()
+                .context("Please configure Route 53 in /etc/gentlsa/route53.cfg")?;
+            let Some(zone) = r53.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Route 53. Bailing.");
+                result.error = Some("not_managed_by_route53".into());
+                return Ok((1, result));
+            };
+            result.route53 = Some(
+                r53.prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
+                    .await?,
+            );
+        }
+        Some(PublisherKind::Google) => {
+            let gcloud = Google::from_env_or_config()
+                .context("Please configure Google Cloud DNS in /etc/gentlsa/google.cfg")?;
+            let Some(zone) = gcloud.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Google Cloud DNS. Bailing.");
+                result.error = Some("not_managed_by_google".into());
+                return Ok((1, result));
+            };
+            result.google = Some(
+                gcloud
+                    .prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
+                    .await?,
+            );
+        }
+        None => {}
     }
-
-    if !use_cloudflare {
-        return Ok((0, result));
-    }
-
-    let cf = Cloudflare::from_env_or_config()
-        .context("Please install/configure Cloudflare credentials for this to work.")?;
-    let Some(zone) = cf.zone_by_name(zone_name).await? else {
-        output::text("Not managed by cloudflare. Bailing.");
-        result.error = Some("not_managed_by_cloudflare".into());
-        return Ok((1, result));
-    };
-    result.cloudflare = Some(
-        cf.prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
-            .await?,
-    );
     Ok((0, result))
 }
 
@@ -817,79 +981,108 @@ async fn verify(
     }
 }
 
-enum UpdateCf {
-    Published(PublishReport),
-    NotManaged,
-}
-
-async fn update_cloudflare(
+async fn publish_cert(
+    kind: PublisherKind,
     zone_name: &str,
     hostname: Option<&str>,
     port: u16,
     cert: &Certificate,
     info: bool,
     publisher: PublisherOpts,
-) -> Result<UpdateCf> {
-    verbose::step(format_args!(
-        "Cloudflare publish zone={zone_name} port={port} replace={} dryrun={}",
-        publisher.replace, publisher.dryrun
-    ));
-    let cf = Cloudflare::from_env_or_config()
-        .context("Please install/configure Cloudflare credentials for this to work.")?;
-    let Some(zone) = cf.zone_by_name(zone_name).await? else {
-        output::text("Not managed by cloudflare. Bailing.");
-        return Ok(UpdateCf::NotManaged);
-    };
-    if info {
-        cf.print_zone_info(&zone);
-    }
+) -> Result<PublishOutcome> {
     let hash = cert.spki_sha256_hex()?;
     let mode = if publisher.replace {
         PublishMode::Replace
     } else {
         PublishMode::Rollover
     };
-    let mut report = cf
-        .publish_tlsa(&zone, hostname, port, &hash, mode, publisher.dryrun)
-        .await?;
-    if info {
-        report.info = Some(serde_json::to_value(cloudflare::ZoneInfo::from_zone(
-            &zone,
-        ))?);
-    }
-    Ok(UpdateCf::Published(report))
-}
-
-async fn update_nsupdate(
-    zone_name: &str,
-    hostname: Option<&str>,
-    port: u16,
-    cert: &Certificate,
-    info: bool,
-    publisher: PublisherOpts,
-) -> Result<PublishReport> {
     verbose::step(format_args!(
-        "nsupdate publish zone={zone_name} port={port} replace={} dryrun={}",
-        publisher.replace, publisher.dryrun
+        "{} publish zone={zone_name} port={port} replace={} dryrun={}",
+        kind.label(),
+        publisher.replace,
+        publisher.dryrun
     ));
-    let ns = Nsupdate::from_env_or_config()
-        .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
-    if info {
-        ns.print_info();
+    match kind {
+        PublisherKind::Cloudflare => {
+            let cf = Cloudflare::from_env_or_config()
+                .context("Please install/configure Cloudflare credentials for this to work.")?;
+            let Some(zone) = cf.zone_by_name(zone_name).await? else {
+                output::text("Not managed by cloudflare. Bailing.");
+                return Ok(PublishOutcome::NotManaged("not_managed_by_cloudflare"));
+            };
+            if info {
+                cf.print_zone_info(&zone);
+            }
+            let mut report = cf
+                .publish_tlsa(&zone, hostname, port, &hash, mode, publisher.dryrun)
+                .await?;
+            if info {
+                report.info = Some(serde_json::to_value(cloudflare::ZoneInfo::from_zone(
+                    &zone,
+                ))?);
+            }
+            Ok(PublishOutcome::Published(report))
+        }
+        PublisherKind::Nsupdate => {
+            let ns = Nsupdate::from_env_or_config()
+                .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
+            if info {
+                ns.print_info();
+            }
+            let mut report = ns
+                .publish_tlsa(zone_name, hostname, port, &hash, mode, publisher.dryrun)
+                .await?;
+            if info {
+                report.info = Some(serde_json::to_value(ns.info())?);
+            }
+            Ok(PublishOutcome::Published(report))
+        }
+        PublisherKind::Route53 => {
+            let r53 = Route53::from_env_or_config()
+                .context("Please configure Route 53 in /etc/gentlsa/route53.cfg")?;
+            let Some(zone) = r53.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Route 53. Bailing.");
+                return Ok(PublishOutcome::NotManaged("not_managed_by_route53"));
+            };
+            if info {
+                r53.print_zone_info(&zone);
+            }
+            let mut report = r53
+                .publish_tlsa(&zone, hostname, port, &hash, mode, publisher.dryrun)
+                .await?;
+            if info {
+                report.info = Some(serde_json::to_value(route53::ZoneInfo {
+                    id: zone.id,
+                    name: zone.name,
+                    private: zone.private,
+                })?);
+            }
+            Ok(PublishOutcome::Published(report))
+        }
+        PublisherKind::Google => {
+            let gcloud = Google::from_env_or_config()
+                .context("Please configure Google Cloud DNS in /etc/gentlsa/google.cfg")?;
+            let Some(zone) = gcloud.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Google Cloud DNS. Bailing.");
+                return Ok(PublishOutcome::NotManaged("not_managed_by_google"));
+            };
+            if info {
+                gcloud.print_zone_info(&zone);
+            }
+            let mut report = gcloud
+                .publish_tlsa(&zone, hostname, port, &hash, mode, publisher.dryrun)
+                .await?;
+            if info {
+                report.info = Some(serde_json::to_value(google::ZoneInfo {
+                    project: gcloud.project().to_string(),
+                    name: zone.name,
+                    dns_name: zone.dns_name,
+                    id: zone.id,
+                })?);
+            }
+            Ok(PublishOutcome::Published(report))
+        }
     }
-    let hash = cert.spki_sha256_hex()?;
-    let mode = if publisher.replace {
-        PublishMode::Replace
-    } else {
-        PublishMode::Rollover
-    };
-    let mut report = ns
-        .publish_tlsa(zone_name, hostname, port, &hash, mode, publisher.dryrun)
-        .await?;
-    if info {
-        report.info = Some(serde_json::to_value(ns.info())?);
-    }
-    Ok(report)
 }
 
 async fn nsupdate_cmd(info: bool) -> Result<u8> {
@@ -965,4 +1158,101 @@ async fn cloudflare_cmd(info: bool, listzones: bool) -> Result<u8> {
         output::emit(&Report::Cloudflare { auth, zones })?;
     }
     Ok(0)
+}
+
+async fn route53_cmd(info: bool, listzones: bool) -> Result<u8> {
+    let show_zones = listzones || !info;
+    verbose::step(format_args!(
+        "route53 info={info} listzones={show_zones}"
+    ));
+    let r53 = Route53::from_env_or_config()
+        .context("Please configure Route 53 in /etc/gentlsa/route53.cfg")?;
+
+    let auth = if info {
+        output::text(">>> Route 53 Information:");
+        output::text(format!("Auth: {}", r53.auth_label()));
+        Some(r53.auth_label())
+    } else {
+        None
+    };
+
+    let zones = if show_zones {
+        let zones = r53.list_zones().await?;
+        if output::is_json() {
+            Some(zones.into_iter().map(route53_zone_ref).collect())
+        } else if zones.is_empty() {
+            println!("No Route 53 hosted zones found.");
+            Some(Vec::new())
+        } else {
+            println!(">>> Route 53 Hosted Zones:");
+            for zone in &zones {
+                println!("{}  {}", zone.id, zone.name);
+            }
+            Some(zones.into_iter().map(route53_zone_ref).collect())
+        }
+    } else {
+        None
+    };
+
+    if output::is_json() {
+        output::emit(&Report::Route53 { auth, zones })?;
+    }
+    Ok(0)
+}
+
+async fn google_cmd(info: bool, listzones: bool) -> Result<u8> {
+    let show_zones = listzones || !info;
+    verbose::step(format_args!("google info={info} listzones={show_zones}"));
+    let gcloud = Google::from_env_or_config()
+        .context("Please configure Google Cloud DNS in /etc/gentlsa/google.cfg")?;
+
+    let (auth, project) = if info {
+        output::text(">>> Google Cloud DNS Information:");
+        output::text(format!("Auth: {}", gcloud.auth_label()));
+        output::text(format!("Project: {}", gcloud.project()));
+        (Some(gcloud.auth_label()), Some(gcloud.project().to_string()))
+    } else {
+        (None, None)
+    };
+
+    let zones = if show_zones {
+        let zones = gcloud.list_zones().await?;
+        if output::is_json() {
+            Some(zones.into_iter().map(google_zone_ref).collect())
+        } else if zones.is_empty() {
+            println!("No Google Cloud DNS managed zones found.");
+            Some(Vec::new())
+        } else {
+            println!(">>> Google Cloud DNS Zones:");
+            for zone in &zones {
+                println!("{}  {}", zone.name, zone.dns_name);
+            }
+            Some(zones.into_iter().map(google_zone_ref).collect())
+        }
+    } else {
+        None
+    };
+
+    if output::is_json() {
+        output::emit(&Report::Google {
+            auth,
+            project,
+            zones,
+        })?;
+    }
+    Ok(0)
+}
+
+fn route53_zone_ref(zone: route53::HostedZone) -> ZoneRef {
+    ZoneRef {
+        id: zone.id,
+        name: zone.name.trim_end_matches('.').to_string(),
+    }
+}
+
+fn google_zone_ref(zone: google::ManagedZone) -> ZoneRef {
+    ZoneRef {
+        id: zone.name,
+        name: zone.dns_name.trim_end_matches('.').to_string(),
+    }
 }

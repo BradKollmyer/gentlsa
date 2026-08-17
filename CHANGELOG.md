@@ -4,6 +4,8 @@
 
 - `list` (and prune DNS lines) decode TLSA usage/selector/matching with RFC 7218 names
 - Publish, list, and prune TLSA records via RFC 2136 dynamic update (`--nsupdate`, TSIG)
+- Publish, list, and prune TLSA records via Amazon Route 53 (`--route53`)
+- Publish, list, and prune TLSA records via Google Cloud DNS (`--google`)
 - Read Cloudflare credentials from `/etc/gentlsa/cloudflare.cfg` (falls back to `~/.cloudflare/cloudflare.cfg`)
 - Add `--json` to emit a single JSON object on stdout
 - Add `-v` / `--verbose` to print each processing step on stderr

@@ -85,6 +85,139 @@ pub fn publish_action(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublisherKind {
+    Cloudflare,
+    Nsupdate,
+    Route53,
+    Google,
+}
+
+impl PublisherKind {
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::Cloudflare => "--cloudflare",
+            Self::Nsupdate => "--nsupdate",
+            Self::Route53 => "--route53",
+            Self::Google => "--google",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cloudflare => "Cloudflare",
+            Self::Nsupdate => "nsupdate",
+            Self::Route53 => "Route 53",
+            Self::Google => "Google Cloud DNS",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListedTlsa {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+    pub usage: u8,
+    pub selector: u8,
+    pub matching: u8,
+    pub certificate: String,
+}
+
+impl ListedTlsa {
+    pub fn to_dane(&self) -> DaneTlsa {
+        DaneTlsa {
+            usage: self.usage,
+            selector: self.selector,
+            matching: self.matching,
+            certificate: self.certificate.clone(),
+        }
+    }
+
+    pub fn from_rdata(name: impl Into<String>, rdata: &str, id: Option<String>) -> Option<Self> {
+        let (usage, selector, matching, certificate) = parse_tlsa_rdata(rdata)?;
+        Some(Self {
+            id,
+            name: name.into(),
+            usage,
+            selector,
+            matching,
+            certificate,
+        })
+    }
+}
+
+pub fn parse_tlsa_rdata(s: &str) -> Option<(u8, u8, u8, String)> {
+    let mut parts = s.split_whitespace();
+    let usage = parts.next()?.parse().ok()?;
+    let selector = parts.next()?.parse().ok()?;
+    let matching = parts.next()?.parse().ok()?;
+    let certificate: String = parts.collect::<Vec<_>>().join("").to_ascii_lowercase();
+    if certificate.is_empty() {
+        return None;
+    }
+    Some((usage, selector, matching, certificate))
+}
+
+pub fn format_tlsa_rdata(record: &DaneTlsa) -> String {
+    format!(
+        "{} {} {} {}",
+        record.usage, record.selector, record.matching, record.certificate
+    )
+}
+
+pub fn live_dane(certificate: &str) -> DaneTlsa {
+    DaneTlsa {
+        usage: tlsa::USAGE,
+        selector: tlsa::SELECTOR,
+        matching: tlsa::MATCHING,
+        certificate: certificate.to_ascii_lowercase(),
+    }
+}
+
+/// Next RRset after a publish decision for backends that replace the whole set.
+pub fn rrset_after_publish(
+    ours: &[DaneTlsa],
+    certificate: &str,
+    action: PublishAction,
+) -> Vec<DaneTlsa> {
+    match action {
+        PublishAction::Added => {
+            let mut next = ours.to_vec();
+            next.push(live_dane(certificate));
+            next
+        }
+        PublishAction::Replaced => {
+            let mut replaced = false;
+            let mut next = Vec::new();
+            for record in ours {
+                if !replaced && record.is_dane_ee_spki_sha256() {
+                    next.push(live_dane(certificate));
+                    replaced = true;
+                } else {
+                    next.push(record.clone());
+                }
+            }
+            if !replaced {
+                next.push(live_dane(certificate));
+            }
+            next
+        }
+        _ => ours.to_vec(),
+    }
+}
+
+pub fn rrset_after_prune(ours: &[DaneTlsa], live_hash: &str) -> Vec<DaneTlsa> {
+    ours.iter()
+        .filter(|record| !record.is_dane_ee_spki_sha256() || record.hash_matches(live_hash))
+        .cloned()
+        .collect()
+}
+
+pub fn fqdn_owner(zone: &str, hostname: Option<&str>, port: u16) -> String {
+    tlsa::fqdn(zone, port, hostname)
+}
+
 pub fn stale_dane<'a>(records: &'a [DaneTlsa], live_hash: &str) -> Vec<&'a DaneTlsa> {
     records
         .iter()
@@ -257,6 +390,35 @@ mod tests {
             Some("mx"),
             &[]
         ));
+    }
+
+    #[test]
+    fn parse_and_format_tlsa_rdata() {
+        let (usage, selector, matching, hash) =
+            parse_tlsa_rdata("3 1 1 AA BB CC").unwrap();
+        assert_eq!((usage, selector, matching, hash.as_str()), (3, 1, 1, "aabbcc"));
+        assert_eq!(
+            format_tlsa_rdata(&live_dane("AABBCC")),
+            "3 1 1 aabbcc"
+        );
+        assert!(parse_tlsa_rdata("not-tlsa").is_none());
+    }
+
+    #[test]
+    fn rrset_publish_and_prune() {
+        let existing = [dane("AA"), other("ZZ")];
+        let added = rrset_after_publish(&existing, "bb", PublishAction::Added);
+        assert_eq!(added.len(), 3);
+        assert_eq!(added[2].certificate, "bb");
+
+        let replaced = rrset_after_publish(&existing, "bb", PublishAction::Replaced);
+        assert_eq!(replaced[0].certificate, "bb");
+        assert_eq!(replaced[1].certificate, "ZZ");
+
+        let kept = rrset_after_prune(&[dane("AA"), dane("BB"), other("ZZ")], "aa");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].certificate, "AA");
+        assert_eq!(kept[1].certificate, "ZZ");
     }
 
     #[test]
