@@ -193,6 +193,12 @@ pub enum Command {
         hostname: Option<String>,
         #[arg(long)]
         info: bool,
+        /// Warn when the live certificate expires in this many days or fewer
+        #[arg(long, default_value_t = 14, value_name = "DAYS")]
+        warn: u32,
+        /// Critical when the live certificate expires in this many days or fewer
+        #[arg(long, default_value_t = 7, value_name = "DAYS")]
+        critical: u32,
     },
     /// Cloudflare helpers
     Cloudflare {
@@ -285,6 +291,43 @@ mod tests {
         match cli.command {
             Command::List { ports, .. } => {
                 assert_eq!(ports.unwrap().0, vec![25, 465]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_verify_warn_critical_defaults() {
+        let cli = Cli::try_parse_from(["gentlsa", "verify", "example.com", "443"]).unwrap();
+        match cli.command {
+            Command::Verify { warn, critical, .. } => {
+                assert_eq!(warn, 14);
+                assert_eq!(critical, 7);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "gentlsa",
+            "verify",
+            "example.com",
+            "25,465",
+            "--warn",
+            "30",
+            "--critical",
+            "10",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Verify {
+                warn,
+                critical,
+                ports,
+                ..
+            } => {
+                assert_eq!(ports.0, vec![25, 465]);
+                assert_eq!(warn, 30);
+                assert_eq!(critical, 10);
             }
             other => panic!("unexpected {other:?}"),
         }

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `verify` warns (exit 1) or goes critical (exit 2) when the live certificate is near expiry (`--warn` / `--critical`, default 14 / 7 days)
+
 ## 0.4.0 - 2026-08-17
 
 - `rollover` publishes a not-yet-live certificate hash, waits the TLSA TTL, reloads, waits again, then prunes

@@ -25,6 +25,14 @@ hash="ff94ad7dfafffed26e98150947dd8b1a7d981fabf90740c574685c81d487b9a8"
     echo "expected rollover --help to mention --resume" >&2
     exit 1
 }
+"$bin" verify --help | grep -q -- '--warn' || {
+    echo "expected verify --help to mention --warn" >&2
+    exit 1
+}
+"$bin" verify --help | grep -q -- '--critical' || {
+    echo "expected verify --help to mention --critical" >&2
+    exit 1
+}
 "$bin" --version
 out="$("$bin" file "$cert" --port 443)"
 printf '%s\n' "$out"

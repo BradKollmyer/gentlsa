@@ -1,1 +1,0 @@
-- Check TLSA certificate expiry (warn / Nagios exit when the live cert is near expiry)

@@ -235,6 +235,8 @@ pub struct VerifyResult {
     pub dns: Vec<JsonTlsa>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub info: Option<CertDetails>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in_days: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -455,6 +457,57 @@ pub fn verify_outcome(live: Option<&str>, dns: &[TlsaRecord]) -> VerifyOutcome {
     }
 }
 
+/// After a matching TLSA hash, raise WARNING (1) or CRITICAL (2) from remaining days.
+/// Hash mismatch and UNKNOWN are left unchanged so expiry cannot hide a bad TLSA.
+pub fn apply_expiry(
+    outcome: VerifyOutcome,
+    days_left: i64,
+    not_yet_valid: bool,
+    warn: u32,
+    critical: u32,
+) -> VerifyOutcome {
+    if outcome.exit != 0 {
+        return outcome;
+    }
+    if not_yet_valid {
+        return VerifyOutcome {
+            status: "error",
+            message: "CRITICAL - certificate is not yet valid".into(),
+            exit: 2,
+        };
+    }
+    if days_left < 0 {
+        return VerifyOutcome {
+            status: "error",
+            message: "CRITICAL - certificate expired".into(),
+            exit: 2,
+        };
+    }
+    if days_left <= i64::from(critical) {
+        return VerifyOutcome {
+            status: "error",
+            message: format!("CRITICAL - certificate {}", expiry_phrase(days_left)),
+            exit: 2,
+        };
+    }
+    if days_left <= i64::from(warn) {
+        return VerifyOutcome {
+            status: "warning",
+            message: format!("WARNING - certificate {}", expiry_phrase(days_left)),
+            exit: 1,
+        };
+    }
+    outcome
+}
+
+fn expiry_phrase(days: i64) -> String {
+    match days {
+        0 => "expires today".into(),
+        1 => "expires in 1 day".into(),
+        n => format!("expires in {n} days"),
+    }
+}
+
 pub fn worst_verify_exit(exits: impl IntoIterator<Item = u8>) -> u8 {
     exits.into_iter().max().unwrap_or(0)
 }
@@ -591,10 +644,60 @@ mod tests {
     }
 
     #[test]
+    fn apply_expiry_thresholds() {
+        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")]);
+
+        let far = apply_expiry(ok.clone(), 90, false, 14, 7);
+        assert_eq!((far.status, far.exit), ("ok", 0));
+        assert_eq!(far.message, "OK - TLSA is valid");
+
+        let warn = apply_expiry(ok.clone(), 10, false, 14, 7);
+        assert_eq!((warn.status, warn.exit), ("warning", 1));
+        assert_eq!(warn.message, "WARNING - certificate expires in 10 days");
+
+        let one = apply_expiry(ok.clone(), 1, false, 14, 7);
+        assert_eq!(one.exit, 2);
+        assert_eq!(one.message, "CRITICAL - certificate expires in 1 day");
+
+        let today = apply_expiry(ok.clone(), 0, false, 14, 7);
+        assert_eq!(today.exit, 2);
+        assert_eq!(today.message, "CRITICAL - certificate expires today");
+
+        let expired = apply_expiry(ok.clone(), -3, false, 14, 7);
+        assert_eq!(expired.exit, 2);
+        assert_eq!(expired.message, "CRITICAL - certificate expired");
+
+        let not_yet = apply_expiry(ok.clone(), 89, true, 14, 7);
+        assert_eq!(not_yet.exit, 2);
+        assert_eq!(not_yet.message, "CRITICAL - certificate is not yet valid");
+
+        let only_expired = apply_expiry(ok.clone(), 1, false, 0, 0);
+        assert_eq!(only_expired.exit, 0);
+
+        let at_zero = apply_expiry(ok, 0, false, 0, 0);
+        assert_eq!(at_zero.exit, 2);
+    }
+
+    #[test]
+    fn apply_expiry_does_not_hide_hash_mismatch() {
+        let err = verify_outcome(Some("aabbcc"), &[tlsa("dddddd")]);
+        let still = apply_expiry(err.clone(), 0, false, 14, 7);
+        assert_eq!(still.exit, 2);
+        assert_eq!(still.status, "error");
+        assert!(still.message.contains("ERROR - TLSA invalid"));
+
+        let unknown = verify_outcome(None, &[]);
+        let still_unknown = apply_expiry(unknown, -1, false, 14, 7);
+        assert_eq!(still_unknown.exit, 3);
+    }
+
+    #[test]
     fn worst_verify_exit_takes_max() {
         assert_eq!(worst_verify_exit([0, 0]), 0);
+        assert_eq!(worst_verify_exit([0, 1]), 1);
         assert_eq!(worst_verify_exit([0, 2]), 2);
         assert_eq!(worst_verify_exit([0, 3, 2]), 3);
+        assert_eq!(worst_verify_exit([1, 0, 2]), 2);
         assert_eq!(worst_verify_exit([2, 0, 3]), 3);
         assert_eq!(worst_verify_exit(std::iter::empty()), 0);
     }
@@ -643,6 +746,7 @@ mod tests {
             live: Some(live.into()),
             dns: vec![JsonTlsa::from_dns(&current[0], Some(live))],
             info: None,
+            expires_in_days: Some(90),
         };
 
         let stale = [tlsa("cccc")];
@@ -656,6 +760,7 @@ mod tests {
             live: Some(live.into()),
             dns: vec![JsonTlsa::from_dns(&stale[0], Some(live))],
             info: None,
+            expires_in_days: Some(2),
         };
 
         let report = Report::Verify {
@@ -671,6 +776,7 @@ mod tests {
         assert_eq!(value["results"][0]["status"], "ok");
         assert_eq!(value["results"][0]["exit"], 0);
         assert_eq!(value["results"][0]["message"], "OK - TLSA is valid");
+        assert_eq!(value["results"][0]["expires_in_days"], 90);
         assert_eq!(value["results"][0]["dns"][0]["status"], "current");
         assert_eq!(value["results"][0]["dns"][0]["usage_name"], "DANE-EE");
         assert_eq!(value["results"][0]["dns"][0]["selector_name"], "SPKI");

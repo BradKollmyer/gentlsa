@@ -34,6 +34,13 @@ pub struct CertDetails {
     pub not_after: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CertLifetime {
+    /// Whole days until `notAfter`. Negative if the certificate has already expired.
+    pub days_left: i64,
+    pub not_yet_valid: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Certificate {
     der: Vec<u8>,
@@ -83,6 +90,17 @@ impl Certificate {
             san: format_san(&cert),
             not_before: format_asn1_time(&cert.validity().not_before),
             not_after: format_asn1_time(&cert.validity().not_after),
+        })
+    }
+
+    pub fn lifetime(&self) -> Result<CertLifetime> {
+        let cert = self.parsed()?;
+        let now = ASN1Time::now();
+        let days_left =
+            (cert.validity().not_after.timestamp() - now.timestamp()).div_euclid(86_400);
+        Ok(CertLifetime {
+            days_left,
+            not_yet_valid: now < cert.validity().not_before,
         })
     }
 
@@ -402,5 +420,17 @@ mod tests {
             parsed.issuer().to_string(),
             "C=US, O=GenTLSA Test, CN=test.example"
         );
+    }
+
+    #[test]
+    fn lifetime_matches_not_after() {
+        let cert = Certificate::from_pem_or_der(TEST_CERT_PEM.as_bytes()).unwrap();
+        let parsed = cert.parsed().unwrap();
+        let now = ASN1Time::now();
+        let expected =
+            (parsed.validity().not_after.timestamp() - now.timestamp()).div_euclid(86_400);
+        let lifetime = cert.lifetime().unwrap();
+        assert_eq!(lifetime.days_left, expected);
+        assert_eq!(lifetime.not_yet_valid, now < parsed.validity().not_before);
     }
 }

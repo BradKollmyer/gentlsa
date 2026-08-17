@@ -90,7 +90,7 @@ gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--c
 gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--dryrun]
 gentlsa [-v|--verbose] [--json] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
 gentlsa [-v|--verbose] [--json] rollover --resume [JOB]
-gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
+gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--warn <DAYS>] [--critical <DAYS>]
 gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] nsupdate [--info]
 gentlsa [-v|--verbose] [--json] route53 [--info] [--listzones]
@@ -102,7 +102,7 @@ gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOS
 
 `-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, publisher APIs). Regular output stays on stdout, so `verify` remains Nagios-safe.
 
-`--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `2` / `3`) and puts the OK/ERROR/UNKNOWN result in `status`, `message`, and `exit`.
+`--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `1` / `2` / `3`) and puts the OK/WARNING/ERROR/UNKNOWN result in `status`, `message`, and `exit`.
 
 ```
 $ gentlsa generate example.com 443 -v
@@ -174,11 +174,13 @@ $ gentlsa generate example.com 25 --hostname mx --cloudflare --dryrun
 
 ### verify
 
-Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate (Nagios-compatible):
+Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate (Nagios-compatible). After a hash match, remaining days until `notAfter` are checked against `--warn` (default 14) and `--critical` (default 7). `--critical` cannot be greater than `--warn`. A hash mismatch stays `ERROR` even if the cert is also expiring.
 
 | Exit | Output | Meaning |
 |------|--------|---------|
-| 0 | `OK - TLSA is valid` | At least one DNS TLSA hash matches the live SPKI SHA-256 |
+| 0 | `OK - TLSA is valid` | At least one DNS TLSA hash matches, and the cert expires after `--warn` days |
+| 1 | `WARNING - certificate expires in N days` | Hash matches, days left ≤ `--warn` |
+| 2 | `CRITICAL - certificate expires in N days` | Hash matches, days left ≤ `--critical`, already expired, or not yet valid |
 | 2 | `ERROR - TLSA invalid: ...` | DNS has TLSA records, none match |
 | 3 | `UNKNOWN - Something went wrong. Check logs` | Lookup or connection failed |
 
@@ -187,7 +189,7 @@ $ gentlsa verify www.freebsd.org 443
 OK - TLSA is valid
 ```
 
-`--info` prints the live certificate before the OK/ERROR/UNKNOWN line.
+`--info` prints the live certificate before the OK/WARNING/CRITICAL/ERROR/UNKNOWN line. JSON includes `expires_in_days` on each result when a live cert was fetched.
 
 ### list
 
