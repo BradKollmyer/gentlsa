@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: Linux x86_64
+          - os: ubuntu-24.04-arm
+            name: Linux arm64
+          - os: macos-latest
+            name: macOS arm64
+          - os: macos-15-intel
+            name: macOS Intel
+          - os: windows-latest
+            name: Windows x86_64
+          - os: windows-11-arm
+            name: Windows arm64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Smoke-test binary
+        shell: bash
+        run: bash scripts/smoke-test.sh
+
+  freebsd:
+    name: FreeBSD amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Native cargo test + release binary, then pkg add the shipped .pkg.
+      # release 14 matches the abi in scripts/build-pkg.sh (FreeBSD:14:amd64).
+      - name: Test in FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          arch: x86_64
+          copyback: false
+          cache-after-prepare: true
+          prepare: |
+            pkg install -y curl python3 ca_root_nss
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          run: |
+            set -eu
+            export PATH="$HOME/.cargo/bin:/usr/local/bin:$PATH"
+            export CARGO_TERM_COLOR=always
+            . "$HOME/.cargo/env"
+            rustc --version
+            cargo test --release --locked
+            cargo build --release --locked
+            sh scripts/smoke-test.sh target/release/gentlsa
+            sh scripts/build-pkg.sh --from-bin target/release/gentlsa
+            pkg add target/freebsd/gentlsa.amd64.pkg
+            sh scripts/smoke-test.sh /usr/local/bin/gentlsa

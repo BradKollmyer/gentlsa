@@ -250,6 +250,8 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+CI runs `cargo test --release` and a binary smoke test (`scripts/smoke-test.sh`) on Linux (x86_64 and arm64), macOS (Apple Silicon and Intel), Windows (x86_64 and arm64), and FreeBSD 14 amd64. The FreeBSD job also `pkg add`s the built `.pkg` and re-runs the smoke test on `/usr/local/bin/gentlsa`.
+
 To build local RPM and deb packages (`cargo-generate-rpm` and `cargo-deb` required):
 
 ```
