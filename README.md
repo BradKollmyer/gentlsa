@@ -22,7 +22,7 @@ Homebrew:
 brew install BradKollmyer/tap/gentlsa
 ```
 
-Fedora / RHEL (installs `/usr/bin/gentlsa`):
+Fedora / RHEL (installs `/usr/bin/gentlsa` and the systemd units):
 
 ```
 # x86_64
@@ -32,9 +32,13 @@ sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/downloa
 sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
 ```
 
-Or download the versioned file (`gentlsa-0.3.5-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`.
+Or download the versioned file (`gentlsa-0.3.5-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`. Same files if you `rpm -i` the package. After install, enable the resume timer if you use `rollover`:
 
-Ubuntu / Debian (installs `/usr/bin/gentlsa`):
+```
+sudo systemctl enable --now gentlsa-resume.timer
+```
+
+Ubuntu / Debian (installs `/usr/bin/gentlsa` and the same systemd units):
 
 ```
 # amd64
@@ -46,14 +50,16 @@ curl -fsSL -O https://github.com/BradKollmyer/gentlsa/releases/latest/download/g
 sudo apt install ./gentlsa.arm64.deb
 ```
 
-FreeBSD (installs `/usr/local/bin/gentlsa`):
+Then `sudo systemctl enable --now gentlsa-resume.timer` if you use `rollover`.
+
+FreeBSD (installs `/usr/local/bin/gentlsa` only — no systemd units):
 
 ```
 # amd64 (FreeBSD 14+)
 sudo pkg add https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.amd64.pkg
 ```
 
-Or download the versioned file (`gentlsa-0.3.5.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package.
+Or download the versioned file (`gentlsa-0.3.5.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package. Resume an interrupted rollover with `gentlsa rollover --resume` from cron or `@reboot`.
 
 Windows (PowerShell):
 
@@ -82,6 +88,8 @@ cargo build --release
 gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare|--nsupdate|--route53|--google] [--replace] [--dryrun]
 gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--info]
 gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--dryrun]
+gentlsa [-v|--verbose] [--json] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
+gentlsa [-v|--verbose] [--json] rollover --resume [JOB]
 gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
 gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] nsupdate [--info]
@@ -204,6 +212,30 @@ $ gentlsa prune example.com 443 --cloudflare --dryrun
 $ gentlsa prune example.com 443 --cloudflare
 ```
 
+### rollover
+
+Publish a not-yet-live certificate hash, wait one TLSA TTL, run `--reload`, wait again, then prune hashes that no longer match the live certificate. A publisher flag is required. `--replace` is not available.
+
+```
+$ gentlsa rollover /etc/letsencrypt/live/example.com/cert.pem example.com 443 \
+    --cloudflare --reload "systemctl reload nginx"
+```
+
+`--ttl` defaults to 300s for Cloudflare (auto TTL) and 3600s for `--nsupdate`, `--route53`, and `--google`. `--ttl 0` skips both waits (unsafe on a live resolver). `--dryrun` prints the sequence without writing, sleeping, or running `--reload`.
+
+Without `--reload`, only the new hash is published and the remaining wait / reload / prune steps are printed. Do not prune before the service presents the new cert.
+
+With `--reload`, a job is written under `/var/lib/gentlsa/rollover/` (or `$GENTLSA_STATE_DIR`, else `~/.local/share/gentlsa/rollover`). `gentlsa rollover --resume` continues from the saved deadlines. `--resume example.com` (or `example.com_443`) limits that to one job.
+
+`--schedule` writes the job and starts `gentlsa-rollover@JOB` so the hook does not block:
+
+```
+$ gentlsa rollover /etc/letsencrypt/live/example.com/cert.pem example.com 443 \
+    --cloudflare --reload "systemctl reload nginx" --schedule
+```
+
+See [Certificate renewal / key rollover](#certificate-renewal--key-rollover) for the DANE sequence, certbot, and which packages ship the systemd units.
+
 ### file
 
 Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name. With a publisher flag (and `--zone --port`), publish that file's hash before you reload the service:
@@ -227,7 +259,48 @@ $ gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --p
 
 `TLSA 3 1 1` hashes the leaf public key. A typical Let's Encrypt renewal mints a new key, so the hash changes. Replacing the DNS record at the same moment you reload the cert leaves a window where caches have one side of the pair and not the other.
 
-Safer sequence:
+[`rollover`](#rollover) is the automated sequence: publish the file hash (not yet served), wait one TTL, `--reload`, wait again, prune. After a reboot the new cert is usually already live (the service re-reads the PEM); `--resume` notices that, skips `--reload`, and only waits until it is safe to prune.
+
+### systemd units
+
+| Package | Units? |
+|---------|--------|
+| Fedora / RHEL (`dnf` / `rpm`) | Yes |
+| Ubuntu / Debian (`apt` / `.deb`) | Yes |
+| FreeBSD (`pkg`) | No |
+| Homebrew, `cargo install`, curl/PowerShell installer | No |
+
+The Linux RPM and deb install:
+
+| Path | Role |
+|------|------|
+| `/usr/lib/systemd/system/gentlsa-resume.service` | `gentlsa rollover --resume` (every pending job) |
+| `/usr/lib/systemd/system/gentlsa-resume.timer` | 1 minute after boot, then every 10 minutes |
+| `/usr/lib/systemd/system/gentlsa-rollover@.service` | Resume one job (`example.com_443`) |
+| `/usr/lib/tmpfiles.d/gentlsa.conf` | Creates `/var/lib/gentlsa/rollover` |
+
+Install does **not** enable the timer. After `dnf install` or `apt install`:
+
+```
+sudo systemctl enable --now gentlsa-resume.timer
+```
+
+`--schedule` writes the job and starts `gentlsa-rollover@example.com_443.service`. If systemd is missing, it prints the `systemctl start` line and leaves the job for `--resume`.
+
+Homebrew and the curl installer do not ship units. Copy `contrib/systemd/` into `/usr/lib/systemd/system/` (and `contrib/systemd/gentlsa.conf` into `/usr/lib/tmpfiles.d/`) and run `systemctl daemon-reload`. On FreeBSD, call `gentlsa rollover --resume` from cron or `@reboot` instead.
+
+Certbot should use `certonly` (no `--nginx` / `--apache` installer) so it does not reload in the same run as issuance.
+
+```
+#!/bin/sh
+# /etc/letsencrypt/renewal-hooks/deploy/gentlsa
+set -eu
+zone=$(basename "$RENEWED_LINEAGE")
+gentlsa rollover "$RENEWED_LINEAGE/cert.pem" "$zone" 443 \
+  --cloudflare --reload "systemctl reload nginx" --schedule
+```
+
+The same sequence by hand:
 
 1. Issue the new certificate, but do not reload the service yet.
 2. Publish the **new** hash next to the old one:
@@ -244,7 +317,7 @@ Safer sequence:
 
 If the new cert is already live, `generate --cloudflare` still **adds** the live hash instead of overwriting. That does not fix clients that only cached the old record, but it avoids deleting a hash that some resolvers still expect.
 
-`--replace` restores the old one-record overwrite.
+`--replace` on `generate` / `file` restores the old one-record overwrite.
 
 ### cloudflare
 
@@ -404,13 +477,13 @@ cargo clippy --all-targets -- -D warnings
 
 CI runs `cargo test --release` and a binary smoke test (`scripts/smoke-test.sh`) on Linux (x86_64 and arm64), macOS (Apple Silicon and Intel), Windows (x86_64 and arm64), and FreeBSD 14 amd64. The FreeBSD job also `pkg add`s the built `.pkg` and re-runs the smoke test on `/usr/local/bin/gentlsa`.
 
-To build local RPM and deb packages (`cargo-generate-rpm` and `cargo-deb` required):
+To build local RPM and deb packages (`cargo-generate-rpm` and `cargo-deb` required). Both include the systemd units from `contrib/systemd/`:
 
 ```
 ./scripts/build-rpms.sh
 ```
 
-To build a local FreeBSD `.pkg` (amd64). On macOS this cross-compiles inside an [Apple container](https://github.com/apple/container) (not Docker):
+To build a local FreeBSD `.pkg` (amd64). On macOS this cross-compiles inside an [Apple container](https://github.com/apple/container) (not Docker). The FreeBSD package is the binary, license, and README only:
 
 ```
 ./scripts/build-pkg.sh

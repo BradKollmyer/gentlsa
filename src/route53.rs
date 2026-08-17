@@ -54,10 +54,9 @@ impl Client {
         verbose::step("loading Route 53 credentials");
         let (creds, source) = load_credentials()?;
         match source {
-            Some(path) => verbose::step(format_args!(
-                "Route 53 credentials from {}",
-                path.display()
-            )),
+            Some(path) => {
+                verbose::step(format_args!("Route 53 credentials from {}", path.display()))
+            }
             None => verbose::step("Route 53 credentials from AWS environment"),
         }
         let http = reqwest::Client::builder()
@@ -281,10 +280,7 @@ impl Client {
         let mut rtype: Option<String> = None;
         let mut identifier: Option<String> = None;
         loop {
-            let mut path = format!(
-                "/2013-04-01/hostedzone/{}/rrset?maxitems=100",
-                zone.id
-            );
+            let mut path = format!("/2013-04-01/hostedzone/{}/rrset?maxitems=100", zone.id);
             if let Some(name) = &name {
                 path.push_str("&name=");
                 path.push_str(&aws_encode(name));
@@ -321,9 +317,17 @@ impl Client {
         Ok(records)
     }
 
-    async fn upsert_rrset(&self, zone: &HostedZone, name: &str, records: &[DaneTlsa]) -> Result<()> {
+    async fn upsert_rrset(
+        &self,
+        zone: &HostedZone,
+        name: &str,
+        records: &[DaneTlsa],
+    ) -> Result<()> {
         let body = change_batch("UPSERT", name, records, self.ttl);
-        verbose::step(format_args!("Route 53 UPSERT {name} ({} value(s))", records.len()));
+        verbose::step(format_args!(
+            "Route 53 UPSERT {name} ({} value(s))",
+            records.len()
+        ));
         self.request(
             "POST",
             &format!("/2013-04-01/hostedzone/{}/rrset", zone.id),
@@ -333,7 +337,12 @@ impl Client {
         Ok(())
     }
 
-    async fn delete_rrset(&self, zone: &HostedZone, name: &str, records: &[DaneTlsa]) -> Result<()> {
+    async fn delete_rrset(
+        &self,
+        zone: &HostedZone,
+        name: &str,
+        records: &[DaneTlsa],
+    ) -> Result<()> {
         let body = change_batch("DELETE", name, records, self.ttl);
         verbose::step(format_args!("Route 53 DELETE {name}"));
         self.request(
@@ -351,10 +360,7 @@ impl Client {
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static(API_HOST));
         if method == "POST" {
-            headers.insert(
-                "content-type",
-                HeaderValue::from_static("application/xml"),
-            );
+            headers.insert("content-type", HeaderValue::from_static("application/xml"));
         }
         sign_v4(
             method,
@@ -571,7 +577,10 @@ fn load_config_credentials() -> Result<Option<(FileCreds, PathBuf)>> {
         };
         return Ok(Some((
             FileCreds {
-                access_key: section_get(section, &["access_key", "access-key", "aws_access_key_id"]),
+                access_key: section_get(
+                    section,
+                    &["access_key", "access-key", "aws_access_key_id"],
+                ),
                 secret_key: section_get(
                     section,
                     &["secret_key", "secret-key", "aws_secret_access_key"],
@@ -794,7 +803,10 @@ mod tests {
                  </ResourceRecordSet>
                </ResourceRecordSets>"#,
         );
-        let listed: Vec<_> = sets.into_iter().flat_map(ParsedRrset::into_listed).collect();
+        let listed: Vec<_> = sets
+            .into_iter()
+            .flat_map(ParsedRrset::into_listed)
+            .collect();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].certificate, "aabb");
         assert_eq!(listed[1].usage, 2);
@@ -810,9 +822,6 @@ mod tests {
 
     #[test]
     fn config_paths_prefer_etc() {
-        assert_eq!(
-            config_paths()[0],
-            PathBuf::from("/etc/gentlsa/route53.cfg")
-        );
+        assert_eq!(config_paths()[0], PathBuf::from("/etc/gentlsa/route53.cfg"));
     }
 }

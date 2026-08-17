@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `rollover` publishes a not-yet-live certificate hash, waits the TLSA TTL, reloads, waits again, then prunes
+- Persist in-progress rollovers and resume them after a reboot (`--resume`, `--schedule`)
+- Ship `gentlsa-resume.service` / `.timer` and `gentlsa-rollover@.service` in the RPM and deb packages (not the FreeBSD `.pkg`)
+
 ## 0.3.5 - 2026-08-17
 
 - `list` (and prune DNS lines) decode TLSA usage/selector/matching with RFC 7218 names

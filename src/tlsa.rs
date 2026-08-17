@@ -41,7 +41,8 @@ pub fn is_dane_ee_spki_sha256(usage: u8, selector: u8, matching: u8) -> bool {
 }
 
 fn named(value: u8, name: Option<&'static str>) -> String {
-    name.map(str::to_string).unwrap_or_else(|| value.to_string())
+    name.map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 /// `DANE-EE SPKI SHA2-256`, or the raw number for an unassigned value.
@@ -202,10 +203,7 @@ mod tests {
             rdata_text(2, 0, 1, "cccc"),
             "2 0 1 (DANE-TA Cert SHA2-256) cccc"
         );
-        assert_eq!(
-            rdata_text(9, 1, 1, "dddd"),
-            "9 1 1 (9 SPKI SHA2-256) dddd"
-        );
+        assert_eq!(rdata_text(9, 1, 1, "dddd"), "9 1 1 (9 SPKI SHA2-256) dddd");
         assert!(is_dane_ee_spki_sha256(3, 1, 1));
         assert!(!is_dane_ee_spki_sha256(2, 1, 1));
         assert_eq!(hash_status(Some("aa"), 3, 1, 1, "AA"), Some("current"));

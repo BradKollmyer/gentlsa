@@ -1,2 +1,1 @@
 - Check TLSA certificate expiry (warn / Nagios exit when the live cert is near expiry)
-- Optional wait/TTL helper for the rollover gap between publish and prune

@@ -188,10 +188,9 @@ impl Client {
                 publish::names_equal(&zone.dns_name, name) || publish::names_equal(&zone.name, name)
             });
         match &zone {
-            Some(zone) => verbose::step(format_args!(
-                "found zone {} ({})",
-                zone.dns_name, zone.name
-            )),
+            Some(zone) => {
+                verbose::step(format_args!("found zone {} ({})", zone.dns_name, zone.name))
+            }
             None => verbose::step(format_args!("no Google Cloud DNS zone named {name}")),
         }
         Ok(zone)
@@ -227,10 +226,7 @@ impl Client {
             "Google Cloud DNS publish {owner} mode={mode:?} dryrun={dryrun}"
         ));
         let current = self.rrset_for_owner(zone, &fqdn).await?;
-        let dane = current
-            .as_ref()
-            .map(Rrset::to_dane)
-            .unwrap_or_default();
+        let dane = current.as_ref().map(Rrset::to_dane).unwrap_or_default();
         let action = publish::publish_action(&dane, certificate, mode, dryrun);
         let report = |action: PublishAction| PublishReport {
             zone: zone.dns_name.trim_end_matches('.').to_string(),
@@ -304,10 +300,7 @@ impl Client {
             "Google Cloud DNS prune stale TLSA for {fqdn} dryrun={dryrun}"
         ));
         let current = self.rrset_for_owner(zone, &fqdn).await?;
-        let dane = current
-            .as_ref()
-            .map(Rrset::to_dane)
-            .unwrap_or_default();
+        let dane = current.as_ref().map(Rrset::to_dane).unwrap_or_default();
         let stale = publish::stale_dane(&dane, live_hash);
         let hashes: Vec<String> = stale
             .iter()
@@ -406,7 +399,9 @@ impl Client {
             change.deletions.push(current.clone());
         }
         if !next.is_empty() {
-            change.additions.push(Rrset::from_dane(fqdn, self.ttl, next));
+            change
+                .additions
+                .push(Rrset::from_dane(fqdn, self.ttl, next));
         }
         if change.additions.is_empty() && change.deletions.is_empty() {
             return Ok(());
@@ -482,10 +477,7 @@ impl Client {
             .http
             .post(TOKEN_URL)
             .form(&[
-                (
-                    "grant_type",
-                    "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                ),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
                 ("assertion", assertion.as_str()),
             ])
             .send()
@@ -520,7 +512,8 @@ impl Rrset {
         self.rrdatas
             .iter()
             .filter_map(|rdata| {
-                ListedTlsa::from_rdata(self.name.clone(), rdata, None).map(|listed| listed.to_dane())
+                ListedTlsa::from_rdata(self.name.clone(), rdata, None)
+                    .map(|listed| listed.to_dane())
             })
             .collect()
     }
@@ -563,8 +556,12 @@ fn load_config() -> Result<Loaded> {
 
     let raw = std::fs::read_to_string(&creds_path)
         .with_context(|| format!("failed to read {}", creds_path.display()))?;
-    let account: ServiceAccount = serde_json::from_str(&raw)
-        .with_context(|| format!("{} is not a service-account JSON file", creds_path.display()))?;
+    let account: ServiceAccount = serde_json::from_str(&raw).with_context(|| {
+        format!(
+            "{} is not a service-account JSON file",
+            creds_path.display()
+        )
+    })?;
     if account.client_email.is_empty() || account.private_key.is_empty() {
         bail!(
             "{} is missing client_email/private_key (need a service account key)",

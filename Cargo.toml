@@ -28,14 +28,24 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 x509-parser = "0.18"
 
 [package.metadata.generate-rpm]
 auto-req = "no"
 require-sh = false
+post_install_script = """
+if [ -d /run/systemd/system ]; then
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/gentlsa.conf >/dev/null 2>&1 || :
+    systemctl daemon-reload >/dev/null 2>&1 || :
+fi
+"""
 assets = [
     { source = "target/release/gentlsa", dest = "/usr/bin/gentlsa", mode = "755" },
+    { source = "contrib/systemd/gentlsa-resume.service", dest = "/usr/lib/systemd/system/gentlsa-resume.service", mode = "644" },
+    { source = "contrib/systemd/gentlsa-resume.timer", dest = "/usr/lib/systemd/system/gentlsa-resume.timer", mode = "644" },
+    { source = "contrib/systemd/gentlsa-rollover@.service", dest = "/usr/lib/systemd/system/gentlsa-rollover@.service", mode = "644" },
+    { source = "contrib/systemd/gentlsa.conf", dest = "/usr/lib/tmpfiles.d/gentlsa.conf", mode = "644" },
     { source = "LICENSE", dest = "/usr/share/licenses/gentlsa/LICENSE", mode = "644", doc = true },
     { source = "README.md", dest = "/usr/share/doc/gentlsa/README.md", mode = "644", doc = true },
 ]
@@ -46,8 +56,13 @@ copyright = "2018 Emiel Kollof, 2026 Brad Kollmyer"
 section = "utils"
 priority = "optional"
 depends = "libc6"
+maintainer-scripts = "contrib/debian"
 assets = [
     ["target/release/gentlsa", "usr/bin/", "755"],
+    ["contrib/systemd/gentlsa-resume.service", "usr/lib/systemd/system/", "644"],
+    ["contrib/systemd/gentlsa-resume.timer", "usr/lib/systemd/system/", "644"],
+    ["contrib/systemd/gentlsa-rollover@.service", "usr/lib/systemd/system/", "644"],
+    ["contrib/systemd/gentlsa.conf", "usr/lib/tmpfiles.d/", "644"],
     ["LICENSE", "usr/share/doc/gentlsa/LICENSE", "644"],
     ["README.md", "usr/share/doc/gentlsa/README.md", "644"],
 ]

@@ -1,0 +1,11 @@
+[Unit]
+Description=DANE TLSA key rollover (%i)
+Documentation=https://github.com/BradKollmyer/gentlsa
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+ExecStart=/usr/bin/gentlsa rollover --resume %i
+Nice=10

@@ -7,6 +7,7 @@ mod nsupdate;
 mod output;
 mod publish;
 mod report;
+mod rollover;
 mod route53;
 mod tlsa;
 mod verbose;
@@ -17,15 +18,16 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::cert::{CertDetails, Certificate, fetch_live};
-use crate::cli::{Cli, Command};
 use crate::cli::PublisherFlags;
+use crate::cli::{Cli, Command};
 use crate::cloudflare::Client as Cloudflare;
 use crate::google::Client as Google;
 use crate::nsupdate::Config as Nsupdate;
 use crate::publish::{PublishMode, PublishReport, PublisherKind};
 use crate::report::{
     CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, NsupdateList,
-    ProviderList, PruneResult, Report, VerifyResult, ZoneRef, verify_outcome, worst_verify_exit,
+    ProviderList, PruneResult, ReloadReport, Report, ResumeJob, RolloverPublish, VerifyResult,
+    ZoneRef, verify_outcome, worst_verify_exit,
 };
 use crate::route53::Client as Route53;
 use crate::tlsa::{connect_host, fqdn};
@@ -105,14 +107,8 @@ async fn run() -> Result<u8> {
             let mut code = 0;
             let mut results = Vec::new();
             for port in ports.as_slice() {
-                let (port_code, result) = prune(
-                    &zone,
-                    *port,
-                    hostname.as_deref(),
-                    publisher.kind(),
-                    dryrun,
-                )
-                .await?;
+                let (port_code, result) =
+                    prune(&zone, *port, hostname.as_deref(), publisher.kind(), dryrun).await?;
                 code = port_code;
                 results.push(result);
             }
@@ -124,6 +120,46 @@ async fn run() -> Result<u8> {
                 })?;
             }
             Ok(code)
+        }
+        Command::Rollover {
+            certfile,
+            zone,
+            ports,
+            hostname,
+            info,
+            publisher,
+            reload,
+            ttl,
+            dryrun,
+            resume,
+            schedule,
+        } => {
+            if let Some(filter) = resume {
+                let filter = if filter == "*" { None } else { Some(filter) };
+                return resume_cmd(filter.as_deref(), info, dryrun).await;
+            }
+            let kind = publisher.kind().with_context(
+                || "rollover requires --cloudflare, --nsupdate, --route53, or --google",
+            )?;
+            let certfile = certfile.context("CERTFILE is required")?;
+            let zone = zone.context("ZONE is required")?;
+            let ports = ports.context("PORTS is required")?;
+            let args = RolloverArgs {
+                certfile,
+                zone,
+                ports: ports.as_slice(),
+                hostname: hostname.as_deref(),
+                info,
+                kind,
+                reload,
+                ttl: ttl.unwrap_or(rollover::default_ttl(kind)),
+                dryrun,
+            };
+            if schedule {
+                schedule_cmd(args).await
+            } else {
+                rollover_cmd(args).await
+            }
         }
         Command::Verify {
             zone,
@@ -246,9 +282,7 @@ impl PublisherOpts {
             dryrun,
         };
         if opts.replace && opts.kind.is_none() {
-            anyhow::bail!(
-                "--replace requires --cloudflare, --nsupdate, --route53, or --google"
-            );
+            anyhow::bail!("--replace requires --cloudflare, --nsupdate, --route53, or --google");
         }
         Ok(opts)
     }
@@ -276,6 +310,457 @@ impl PublisherReports {
 enum PublishOutcome {
     Published(PublishReport),
     NotManaged(&'static str),
+}
+
+struct RolloverArgs<'a> {
+    certfile: std::path::PathBuf,
+    zone: String,
+    ports: &'a [u16],
+    hostname: Option<&'a str>,
+    info: bool,
+    kind: PublisherKind,
+    reload: Option<String>,
+    ttl: u32,
+    dryrun: bool,
+}
+
+async fn schedule_cmd(args: RolloverArgs<'_>) -> Result<u8> {
+    if args.reload.is_none() {
+        anyhow::bail!("--schedule requires --reload");
+    }
+    let cert = Certificate::from_file(&args.certfile)?;
+    if !output::is_json() {
+        cert.print_info(args.hostname, args.ports, args.info)?;
+    }
+    let hash = cert.spki_sha256_hex()?;
+    let job = rollover::Job::new(
+        args.certfile.clone(),
+        args.zone.clone(),
+        args.ports,
+        args.hostname,
+        args.kind,
+        args.reload.clone(),
+        args.ttl,
+        hash.clone(),
+    );
+    if args.dryrun {
+        output::text(format!(
+            ">>> dry run: would schedule {} ({})",
+            job.id,
+            job.unit_name()
+        ));
+    } else {
+        rollover::save_job(&job)?;
+        output::text(format!(">>> Scheduled rollover job {}", job.id));
+        match rollover::start_systemd_unit(&job.id) {
+            Ok(()) => output::text(format!(">>> Started {}", job.unit_name())),
+            Err(err) => {
+                output::text(format!(">>> {err:#}"));
+                output::text(format!(
+                    ">>> Start it with: systemctl start --no-block {}",
+                    job.unit_name()
+                ));
+                output::text(">>> After a reboot: systemctl start gentlsa-resume.service");
+            }
+        }
+    }
+    if output::is_json() {
+        output::emit(&Report::Rollover {
+            zone: args.zone,
+            hostname: args.hostname.map(str::to_string),
+            path: args.certfile.display().to_string(),
+            certificate: hash,
+            ttl: args.ttl,
+            dryrun: args.dryrun,
+            job: Some(job.id.clone()),
+            scheduled: true,
+            unit: Some(job.unit_name()),
+            info: if args.info {
+                Some(cert.details()?)
+            } else {
+                None
+            },
+            publish: Vec::new(),
+            reload: None,
+            prune: Vec::new(),
+            next: None,
+            error: None,
+        })?;
+    }
+    Ok(0)
+}
+
+async fn resume_cmd(filter: Option<&str>, info: bool, dryrun: bool) -> Result<u8> {
+    let jobs = rollover::load_jobs(filter)?;
+    if jobs.is_empty() {
+        output::text(">>> no pending rollovers");
+        if output::is_json() {
+            output::emit(&Report::Resume { jobs: Vec::new() })?;
+        }
+        return Ok(0);
+    }
+
+    let mut code = 0;
+    let mut summaries = Vec::new();
+    for job in jobs {
+        output::text(format!(">>> Resume {} ({})", job.id, job.phase.as_str()));
+        match rollover::acquire(&job.id)? {
+            None => {
+                output::text(format!(">>> already running: {}", job.id));
+                summaries.push(ResumeJob {
+                    id: job.id,
+                    zone: job.zone,
+                    status: "already_running",
+                    error: None,
+                });
+            }
+            Some(_guard) => {
+                let hostname = job.hostname.clone();
+                let args = RolloverArgs {
+                    certfile: job.certfile.clone(),
+                    zone: job.zone.clone(),
+                    ports: &job.ports,
+                    hostname: hostname.as_deref(),
+                    info,
+                    kind: job.kind()?,
+                    reload: job.reload.clone(),
+                    ttl: job.ttl,
+                    dryrun,
+                };
+                match execute_rollover(args, Some(job.clone()), false).await {
+                    Ok(0) => summaries.push(ResumeJob {
+                        id: job.id,
+                        zone: job.zone,
+                        status: "completed",
+                        error: None,
+                    }),
+                    Ok(job_code) => {
+                        code = code.max(job_code);
+                        summaries.push(ResumeJob {
+                            id: job.id,
+                            zone: job.zone,
+                            status: "error",
+                            error: Some(format!("exit {job_code}")),
+                        });
+                    }
+                    Err(err) => {
+                        let message = format!("{err:#}");
+                        eprintln!("{message}");
+                        code = 1;
+                        summaries.push(ResumeJob {
+                            id: job.id,
+                            zone: job.zone,
+                            status: "error",
+                            error: Some(message),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if output::is_json() {
+        output::emit(&Report::Resume { jobs: summaries })?;
+    }
+    Ok(code)
+}
+
+async fn rollover_cmd(args: RolloverArgs<'_>) -> Result<u8> {
+    if args.dryrun || args.reload.is_none() {
+        return execute_rollover(args, None, true).await;
+    }
+    let cert = Certificate::from_file(&args.certfile)?;
+    let hash = cert.spki_sha256_hex()?;
+    let mut job = rollover::Job::new(
+        args.certfile.clone(),
+        args.zone.clone(),
+        args.ports,
+        args.hostname,
+        args.kind,
+        args.reload.clone(),
+        args.ttl,
+        hash,
+    );
+    if let Some(existing) = rollover::load_job_in(&rollover::state_dir()?, &job.id)?
+        && existing.certificate.eq_ignore_ascii_case(&job.certificate)
+    {
+        verbose::step(format_args!(
+            "resuming existing job {} from {}",
+            existing.id,
+            existing.phase.as_str()
+        ));
+        job = existing;
+    }
+    let Some(_guard) = rollover::acquire(&job.id)? else {
+        anyhow::bail!("rollover {} is already running", job.id);
+    };
+    rollover::save_job(&job)?;
+    execute_rollover(args, Some(job), true).await
+}
+
+async fn execute_rollover(
+    args: RolloverArgs<'_>,
+    mut job: Option<rollover::Job>,
+    emit: bool,
+) -> Result<u8> {
+    let RolloverArgs {
+        certfile,
+        zone,
+        ports,
+        hostname,
+        info,
+        kind,
+        reload,
+        ttl,
+        dryrun,
+    } = args;
+    let publisher = PublisherOpts {
+        kind: Some(kind),
+        replace: false,
+        dryrun,
+    };
+
+    verbose::step(format_args!(
+        "rollover {} zone={zone} ports={} ttl={ttl} reload={} dryrun={dryrun} job={}",
+        certfile.display(),
+        ports
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        reload.as_deref().unwrap_or("(none)"),
+        job.as_ref().map(|job| job.id.as_str()).unwrap_or("(none)")
+    ));
+
+    let cert = Certificate::from_file(&certfile)?;
+    if !output::is_json() {
+        cert.print_info(hostname, ports, info)?;
+    }
+    let hash = cert.spki_sha256_hex()?;
+    if let Some(job) = &job
+        && !hash.eq_ignore_ascii_case(&job.certificate)
+    {
+        anyhow::bail!(
+            "certificate {} no longer matches job {} (job {}, file {}). Remove the job and start a new rollover",
+            certfile.display(),
+            job.id,
+            job.certificate,
+            hash
+        );
+    }
+
+    let persist = |job: Option<&rollover::Job>| -> Result<()> {
+        if let Some(job) = job {
+            rollover::save_job(job)?;
+        }
+        Ok(())
+    };
+
+    let mut code = 0;
+    let mut error = None;
+    let mut publish = Vec::new();
+    let mut reload_report = None;
+    let mut prune_results = Vec::new();
+    let mut next = None;
+    let start = job.as_ref().map(|job| job.phase.start_index()).unwrap_or(0);
+    let sequence = rollover::phases(reload.is_some());
+    let mut skip_reload = false;
+
+    for phase in sequence.iter().skip(start) {
+        if code != 0 {
+            break;
+        }
+        if skip_reload
+            && matches!(
+                phase,
+                rollover::Phase::Wait(rollover::WaitReason::BeforeReload) | rollover::Phase::Reload
+            )
+        {
+            continue;
+        }
+        match phase {
+            rollover::Phase::Publish => {
+                output::text(">>> Publish");
+                for port in ports {
+                    let mut item = RolloverPublish {
+                        port: *port,
+                        owner: tlsa::owner_name(*port, hostname),
+                        cloudflare: None,
+                        nsupdate: None,
+                        route53: None,
+                        google: None,
+                        error: None,
+                    };
+                    match publish_cert(kind, &zone, hostname, *port, &cert, info, publisher).await?
+                    {
+                        PublishOutcome::Published(report) => match kind {
+                            PublisherKind::Cloudflare => item.cloudflare = Some(report),
+                            PublisherKind::Nsupdate => item.nsupdate = Some(report),
+                            PublisherKind::Route53 => item.route53 = Some(report),
+                            PublisherKind::Google => item.google = Some(report),
+                        },
+                        PublishOutcome::NotManaged(code_name) => {
+                            item.error = Some(code_name.into());
+                            error = Some(code_name.into());
+                            code = 1;
+                        }
+                    }
+                    publish.push(item);
+                    if code != 0 {
+                        break;
+                    }
+                }
+                if code == 0
+                    && let Some(job) = job.as_mut()
+                {
+                    job.mark_published(rollover::now_unix());
+                    persist(Some(job))?;
+                }
+            }
+            rollover::Phase::Wait(reason) => {
+                if *reason == rollover::WaitReason::BeforeReload
+                    && live_matches_file(&zone, ports, hostname, &hash).await
+                {
+                    output::text(
+                        ">>> service already presents the new certificate; skipping reload",
+                    );
+                    skip_reload = true;
+                    if let Some(job) = job.as_mut() {
+                        job.mark_already_live(rollover::now_unix());
+                        persist(Some(job))?;
+                    }
+                    continue;
+                }
+                let seconds = match (reason, job.as_ref()) {
+                    (rollover::WaitReason::BeforeReload, Some(job)) => {
+                        rollover::remaining(job.reload_after, rollover::now_unix())
+                    }
+                    (rollover::WaitReason::BeforePrune, Some(job)) => {
+                        rollover::remaining(job.prune_after, rollover::now_unix())
+                    }
+                    _ => u64::from(ttl),
+                };
+                rollover::wait_ttl(seconds, *reason, dryrun).await;
+                if let Some(job) = job.as_mut() {
+                    match reason {
+                        rollover::WaitReason::BeforeReload => job.mark_waiting_reload(),
+                        rollover::WaitReason::BeforePrune => job.mark_ready_to_prune(),
+                    }
+                    persist(Some(job))?;
+                }
+            }
+            rollover::Phase::Reload => {
+                let command = reload.as_deref().expect("reload phase requires --reload");
+                output::text(rollover::reload_banner(command, dryrun));
+                if dryrun {
+                    reload_report = Some(ReloadReport {
+                        command: command.to_string(),
+                        status: "would_run",
+                        exit: None,
+                    });
+                } else {
+                    match rollover::run_reload(command) {
+                        Ok(exit) => {
+                            reload_report = Some(ReloadReport {
+                                command: command.to_string(),
+                                status: "ran",
+                                exit: Some(exit),
+                            });
+                            if let Some(job) = job.as_mut() {
+                                job.mark_reloaded(rollover::now_unix());
+                                persist(Some(job))?;
+                            }
+                        }
+                        Err(err) => {
+                            let message = format!("{err:#}");
+                            eprintln!("{message}");
+                            reload_report = Some(ReloadReport {
+                                command: command.to_string(),
+                                status: "failed",
+                                exit: None,
+                            });
+                            error = Some(message);
+                            code = 1;
+                        }
+                    }
+                }
+            }
+            rollover::Phase::Prune => {
+                if dryrun {
+                    output::text(">>> dry run: would prune stale TLSA after reload");
+                } else {
+                    output::text(">>> Prune");
+                    for port in ports {
+                        let (port_code, result) =
+                            prune(&zone, *port, hostname, Some(kind), false).await?;
+                        if port_code != 0 {
+                            code = port_code;
+                            error = result.error.clone();
+                        }
+                        prune_results.push(result);
+                        if code != 0 {
+                            break;
+                        }
+                    }
+                    if code == 0
+                        && let Some(job) = &job
+                    {
+                        rollover::remove_job(&job.id)?;
+                    }
+                }
+            }
+        }
+    }
+
+    let advise = (reload.is_none() && code == 0)
+        || reload_report
+            .as_ref()
+            .is_some_and(|report| report.status == "failed");
+    if advise {
+        let advice = rollover::next_steps(&zone, ports, hostname, kind, ttl);
+        output::text(&advice);
+        next = Some(advice);
+    }
+
+    if emit && output::is_json() {
+        output::emit(&Report::Rollover {
+            zone,
+            hostname: hostname.map(str::to_string),
+            path: certfile.display().to_string(),
+            certificate: hash,
+            ttl,
+            dryrun,
+            job: job.map(|job| job.id),
+            scheduled: false,
+            unit: None,
+            info: if info { Some(cert.details()?) } else { None },
+            publish,
+            reload: reload_report,
+            prune: prune_results,
+            next,
+            error,
+        })?;
+    }
+    Ok(code)
+}
+
+async fn live_matches_file(
+    zone: &str,
+    ports: &[u16],
+    hostname: Option<&str>,
+    file_hash: &str,
+) -> bool {
+    if ports.is_empty() {
+        return false;
+    }
+    for port in ports {
+        let Some(live) = live_hash(zone, *port, hostname).await else {
+            return false;
+        };
+        if !live.eq_ignore_ascii_case(file_hash) {
+            return false;
+        }
+    }
+    true
 }
 
 async fn generate(
@@ -470,9 +955,7 @@ async fn list(
                     name: name.clone(),
                     records: records
                         .iter()
-                        .map(|record| {
-                            JsonTlsa::from_dns(record, live)
-                        })
+                        .map(|record| JsonTlsa::from_dns(record, live))
                         .collect(),
                     error: None,
                 }),
@@ -955,9 +1438,7 @@ async fn verify(
 
     let dns = dns_record
         .iter()
-        .map(|record| {
-            JsonTlsa::from_dns(record, Some(&host_hash))
-        })
+        .map(|record| JsonTlsa::from_dns(record, Some(&host_hash)))
         .collect();
 
     let outcome = verify_outcome(Some(&host_hash), &dns_record);
@@ -1162,9 +1643,7 @@ async fn cloudflare_cmd(info: bool, listzones: bool) -> Result<u8> {
 
 async fn route53_cmd(info: bool, listzones: bool) -> Result<u8> {
     let show_zones = listzones || !info;
-    verbose::step(format_args!(
-        "route53 info={info} listzones={show_zones}"
-    ));
+    verbose::step(format_args!("route53 info={info} listzones={show_zones}"));
     let r53 = Route53::from_env_or_config()
         .context("Please configure Route 53 in /etc/gentlsa/route53.cfg")?;
 
@@ -1210,7 +1689,10 @@ async fn google_cmd(info: bool, listzones: bool) -> Result<u8> {
         output::text(">>> Google Cloud DNS Information:");
         output::text(format!("Auth: {}", gcloud.auth_label()));
         output::text(format!("Project: {}", gcloud.project()));
-        (Some(gcloud.auth_label()), Some(gcloud.project().to_string()))
+        (
+            Some(gcloud.auth_label()),
+            Some(gcloud.project().to_string()),
+        )
     } else {
         (None, None)
     };

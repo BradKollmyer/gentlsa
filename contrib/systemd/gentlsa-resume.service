@@ -1,0 +1,15 @@
+[Unit]
+Description=Resume interrupted GenTLSA DANE rollovers
+Documentation=https://github.com/BradKollmyer/gentlsa
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Default nsupdate/Route 53/Google waits are 2×3600s.
+TimeoutStartSec=infinity
+ExecStart=/usr/bin/gentlsa rollover --resume
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

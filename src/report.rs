@@ -76,6 +76,35 @@ pub enum Report {
         #[serde(skip_serializing_if = "Option::is_none")]
         zones: Option<Vec<ZoneRef>>,
     },
+    Rollover {
+        zone: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hostname: Option<String>,
+        path: String,
+        certificate: String,
+        ttl: u32,
+        dryrun: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        job: Option<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        scheduled: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        info: Option<CertDetails>,
+        publish: Vec<RolloverPublish>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reload: Option<ReloadReport>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        prune: Vec<PruneResult>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        next: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    Resume {
+        jobs: Vec<ResumeJob>,
+    },
     File {
         path: String,
         usage: u8,
@@ -218,6 +247,39 @@ pub struct ZoneRef {
 pub struct FileRecord {
     pub port: u16,
     pub owner: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RolloverPublish {
+    pub port: u16,
+    pub owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloudflare: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nsupdate: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route53: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReloadReport {
+    pub command: String,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResumeJob {
+    pub id: String,
+    pub zone: String,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl JsonTlsa {
@@ -438,6 +500,55 @@ mod tests {
         assert!(value.get("cloudflare").is_none());
     }
 
+    #[test]
+    fn rollover_report_json_shape() {
+        let cert = Certificate::from_file(Path::new("tests/fixtures/test.example.pem")).unwrap();
+        let hash = cert.spki_sha256_hex().unwrap();
+        let report = Report::Rollover {
+            zone: "example.com".into(),
+            hostname: None,
+            path: "tests/fixtures/test.example.pem".into(),
+            certificate: hash.clone(),
+            ttl: 300,
+            dryrun: true,
+            job: Some("example.com_443".into()),
+            scheduled: false,
+            unit: None,
+            info: None,
+            publish: vec![RolloverPublish {
+                port: 443,
+                owner: tlsa::owner_name(443, None),
+                cloudflare: None,
+                nsupdate: None,
+                route53: None,
+                google: None,
+                error: None,
+            }],
+            reload: Some(ReloadReport {
+                command: "systemctl reload nginx".into(),
+                status: "would_run",
+                exit: None,
+            }),
+            prune: Vec::new(),
+            next: None,
+            error: None,
+        };
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["command"], "rollover");
+        assert_eq!(value["zone"], "example.com");
+        assert_eq!(value["certificate"], hash);
+        assert_eq!(value["ttl"], 300);
+        assert_eq!(value["dryrun"], true);
+        assert_eq!(value["publish"][0]["owner"], "_443._tcp");
+        assert_eq!(value["reload"]["status"], "would_run");
+        assert_eq!(value["job"], "example.com_443");
+        assert!(value.get("scheduled").is_none());
+        assert!(value.get("prune").is_none());
+        assert!(value.get("hostname").is_none());
+        assert!(value.get("next").is_none());
+        assert!(value.get("error").is_none());
+    }
+
     fn tlsa(hash: &str) -> TlsaRecord {
         TlsaRecord {
             usage: tlsa::USAGE,
@@ -579,10 +690,7 @@ mod tests {
     fn list_text_decodes_rfc7218_names() {
         let current = tlsa("aabb");
         let listed = JsonTlsa::from_dns(&current, Some("aabb"));
-        assert_eq!(
-            listed.to_text(),
-            "3 1 1 (DANE-EE SPKI SHA2-256) aabb"
-        );
+        assert_eq!(listed.to_text(), "3 1 1 (DANE-EE SPKI SHA2-256) aabb");
         assert_eq!(listed.status, Some("current"));
         assert_eq!(listed.usage_name, Some("DANE-EE"));
 
@@ -593,10 +701,7 @@ mod tests {
             certificate: "cccc".into(),
         };
         let listed = JsonTlsa::from_dns(&other, Some("aabb"));
-        assert_eq!(
-            listed.to_text(),
-            "2 0 1 (DANE-TA Cert SHA2-256) cccc"
-        );
+        assert_eq!(listed.to_text(), "2 0 1 (DANE-TA Cert SHA2-256) cccc");
         assert_eq!(listed.status, None);
         assert_eq!(listed.usage_name, Some("DANE-TA"));
         assert_eq!(listed.selector_name, Some("Cert"));

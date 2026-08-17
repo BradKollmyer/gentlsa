@@ -1,0 +1,12 @@
+[Unit]
+Description=Retry interrupted GenTLSA DANE rollovers
+Documentation=https://github.com/BradKollmyer/gentlsa
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=10min
+Persistent=true
+Unit=gentlsa-resume.service
+
+[Install]
+WantedBy=timers.target

@@ -111,6 +111,25 @@ impl PublisherKind {
             Self::Google => "Google Cloud DNS",
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cloudflare => "cloudflare",
+            Self::Nsupdate => "nsupdate",
+            Self::Route53 => "route53",
+            Self::Google => "google",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "cloudflare" | "cf" => Some(Self::Cloudflare),
+            "nsupdate" | "rfc2136" => Some(Self::Nsupdate),
+            "route53" | "r53" => Some(Self::Route53),
+            "google" | "gcp" | "clouddns" => Some(Self::Google),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -394,13 +413,12 @@ mod tests {
 
     #[test]
     fn parse_and_format_tlsa_rdata() {
-        let (usage, selector, matching, hash) =
-            parse_tlsa_rdata("3 1 1 AA BB CC").unwrap();
-        assert_eq!((usage, selector, matching, hash.as_str()), (3, 1, 1, "aabbcc"));
+        let (usage, selector, matching, hash) = parse_tlsa_rdata("3 1 1 AA BB CC").unwrap();
         assert_eq!(
-            format_tlsa_rdata(&live_dane("AABBCC")),
-            "3 1 1 aabbcc"
+            (usage, selector, matching, hash.as_str()),
+            (3, 1, 1, "aabbcc")
         );
+        assert_eq!(format_tlsa_rdata(&live_dane("AABBCC")), "3 1 1 aabbcc");
         assert!(parse_tlsa_rdata("not-tlsa").is_none());
     }
 
@@ -419,6 +437,23 @@ mod tests {
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].certificate, "AA");
         assert_eq!(kept[1].certificate, "ZZ");
+    }
+
+    #[test]
+    fn publisher_kind_name_roundtrip() {
+        for kind in [
+            PublisherKind::Cloudflare,
+            PublisherKind::Nsupdate,
+            PublisherKind::Route53,
+            PublisherKind::Google,
+        ] {
+            assert_eq!(PublisherKind::from_name(kind.name()), Some(kind));
+        }
+        assert_eq!(
+            PublisherKind::from_name("CF"),
+            Some(PublisherKind::Cloudflare)
+        );
+        assert!(PublisherKind::from_name("digitalocean").is_none());
     }
 
     #[test]

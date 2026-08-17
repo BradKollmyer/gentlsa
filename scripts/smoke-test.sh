@@ -17,6 +17,14 @@ cert="$root/tests/fixtures/test.example.pem"
 hash="ff94ad7dfafffed26e98150947dd8b1a7d981fabf90740c574685c81d487b9a8"
 
 "$bin" --help >/dev/null
+"$bin" rollover --help | grep -q -- '--reload' || {
+    echo "expected rollover --help to mention --reload" >&2
+    exit 1
+}
+"$bin" rollover --help | grep -q -- '--resume' || {
+    echo "expected rollover --help to mention --resume" >&2
+    exit 1
+}
 "$bin" --version
 out="$("$bin" file "$cert" --port 443)"
 printf '%s\n' "$out"

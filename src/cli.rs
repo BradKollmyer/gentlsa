@@ -38,7 +38,7 @@ impl FromStr for Ports {
     }
 }
 
-/// Mutually exclusive publisher flags shared by generate/list/prune/file.
+/// Mutually exclusive publisher flags shared by generate/list/prune/file/rollover.
 #[derive(Debug, Clone, Copy, Default, clap::Args)]
 pub struct PublisherFlags {
     /// Publish / list / prune via the Cloudflare API
@@ -142,6 +142,46 @@ pub enum Command {
         publisher: PublisherFlags,
         #[arg(long)]
         dryrun: bool,
+    },
+    /// Publish a new-cert hash, wait the TLSA TTL, reload, wait, then prune
+    Rollover {
+        /// Local PEM or DER of the new certificate (not yet served)
+        #[arg(required_unless_present = "resume")]
+        certfile: Option<PathBuf>,
+        #[arg(required_unless_present = "resume")]
+        zone: Option<String>,
+        /// Service port or comma-separated list (for example 443 or 25,465)
+        #[arg(value_name = "PORTS", required_unless_present = "resume")]
+        ports: Option<Ports>,
+        /// Short hostname, without the zone (for example "mx")
+        #[arg(long)]
+        hostname: Option<String>,
+        /// Print certificate details
+        #[arg(long)]
+        info: bool,
+        #[command(flatten)]
+        publisher: PublisherFlags,
+        /// Command to run after the first TTL so the service presents the new certificate
+        #[arg(long, value_name = "CMD")]
+        reload: Option<String>,
+        /// Seconds to wait before reload and again before prune (default: 300 Cloudflare, 3600 otherwise)
+        #[arg(long)]
+        ttl: Option<u32>,
+        /// Print the sequence without writing records, sleeping, or running --reload
+        #[arg(long)]
+        dryrun: bool,
+        /// Resume a pending rollover after a reboot (all jobs, or one job id / zone)
+        #[arg(
+            long,
+            value_name = "JOB",
+            num_args = 0..=1,
+            default_missing_value = "*",
+            conflicts_with = "certfile"
+        )]
+        resume: Option<String>,
+        /// Write the job and start gentlsa-rollover@JOB (does not block)
+        #[arg(long, conflicts_with = "resume", requires = "reload")]
+        schedule: bool,
     },
     /// Verify DNS TLSA against the live certificate (Nagios-compatible)
     Verify {
@@ -335,8 +375,7 @@ mod tests {
             ])
             .is_err()
         );
-        let cli =
-            Cli::try_parse_from(["gentlsa", "list", "example.com", "--route53"]).unwrap();
+        let cli = Cli::try_parse_from(["gentlsa", "list", "example.com", "--route53"]).unwrap();
         match cli.command {
             Command::List { publisher, .. } => assert!(publisher.route53),
             other => panic!("unexpected {other:?}"),
@@ -380,5 +419,169 @@ mod tests {
 
         let after = Cli::try_parse_from(["gentlsa", "file", "cert.pem", "--json"]).unwrap();
         assert!(after.json);
+    }
+
+    #[test]
+    fn clap_rollover_requires_cert_zone_ports() {
+        assert!(Cli::try_parse_from(["gentlsa", "rollover"]).is_err());
+        assert!(Cli::try_parse_from(["gentlsa", "rollover", "cert.pem"]).is_err());
+        assert!(Cli::try_parse_from(["gentlsa", "rollover", "cert.pem", "example.com"]).is_err());
+        let cli = Cli::try_parse_from([
+            "gentlsa",
+            "rollover",
+            "cert.pem",
+            "example.com",
+            "25,465",
+            "--hostname",
+            "mx",
+            "--nsupdate",
+            "--reload",
+            "systemctl reload postfix",
+            "--ttl",
+            "300",
+            "--dryrun",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Rollover {
+                certfile,
+                zone,
+                ports,
+                hostname,
+                publisher,
+                reload,
+                ttl,
+                dryrun,
+                info,
+                resume,
+                schedule,
+            } => {
+                assert_eq!(certfile, Some(PathBuf::from("cert.pem")));
+                assert_eq!(zone.as_deref(), Some("example.com"));
+                assert_eq!(ports.unwrap().0, vec![25, 465]);
+                assert_eq!(hostname.as_deref(), Some("mx"));
+                assert!(publisher.nsupdate);
+                assert_eq!(reload.as_deref(), Some("systemctl reload postfix"));
+                assert_eq!(ttl, Some(300));
+                assert!(dryrun);
+                assert!(!info);
+                assert!(resume.is_none());
+                assert!(!schedule);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_rollover_resume_and_schedule() {
+        assert!(Cli::try_parse_from(["gentlsa", "rollover"]).is_err());
+        let all = Cli::try_parse_from(["gentlsa", "rollover", "--resume"]).unwrap();
+        match all.command {
+            Command::Rollover {
+                resume,
+                certfile,
+                zone,
+                ports,
+                ..
+            } => {
+                assert_eq!(resume.as_deref(), Some("*"));
+                assert!(certfile.is_none());
+                assert!(zone.is_none());
+                assert!(ports.is_none());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let one =
+            Cli::try_parse_from(["gentlsa", "rollover", "--resume", "example.com_443"]).unwrap();
+        match one.command {
+            Command::Rollover { resume, .. } => {
+                assert_eq!(resume.as_deref(), Some("example.com_443"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let scheduled = Cli::try_parse_from([
+            "gentlsa",
+            "rollover",
+            "cert.pem",
+            "example.com",
+            "443",
+            "--cloudflare",
+            "--reload",
+            "systemctl reload nginx",
+            "--schedule",
+        ])
+        .unwrap();
+        match scheduled.command {
+            Command::Rollover {
+                schedule, reload, ..
+            } => {
+                assert!(schedule);
+                assert_eq!(reload.as_deref(), Some("systemctl reload nginx"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "rollover",
+                "cert.pem",
+                "example.com",
+                "443",
+                "--resume"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "rollover",
+                "cert.pem",
+                "example.com",
+                "443",
+                "--cloudflare",
+                "--schedule"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn clap_rollover_has_no_replace() {
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "rollover",
+                "cert.pem",
+                "example.com",
+                "443",
+                "--cloudflare",
+                "--replace"
+            ])
+            .is_err()
+        );
+        let cli =
+            Cli::try_parse_from(["gentlsa", "rollover", "cert.pem", "example.com", "443"]).unwrap();
+        match cli.command {
+            Command::Rollover {
+                publisher,
+                reload,
+                ttl,
+                dryrun,
+                resume,
+                schedule,
+                ..
+            } => {
+                assert!(publisher.kind().is_none());
+                assert!(reload.is_none());
+                assert!(ttl.is_none());
+                assert!(!dryrun);
+                assert!(resume.is_none());
+                assert!(!schedule);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }
