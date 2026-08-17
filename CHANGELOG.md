@@ -1,8 +1,14 @@
 # Changelog
 
-## 0.3.3 - 2026-08-16
+## 0.3.4 - 2026-08-16
 
 - Ship FreeBSD `.pkg` packages (`pkg add`) for amd64
+- Add `list` and `prune` for inspecting and dropping stale TLSA records
+- Cloudflare publish adds a rollover hash instead of overwriting; `--replace` restores overwrite
+- `file --cloudflare` can publish a not-yet-live certificate
+
+## 0.3.3 - 2026-08-16
+
 - Fix RPM architecture so `gentlsa.x86_64.rpm` is actually x86_64, not aarch64
 
 ## 0.3.2 - 2026-08-16

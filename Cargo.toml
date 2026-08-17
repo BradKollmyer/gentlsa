@@ -1,6 +1,6 @@
 [package]
 name = "gentlsa"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 description = "Simple tool for dealing with DANE/TLSA records"
 license = "BSD-2-Clause"
