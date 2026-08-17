@@ -51,9 +51,7 @@ pub struct DaneTlsa {
 
 impl DaneTlsa {
     pub fn is_dane_ee_spki_sha256(&self) -> bool {
-        self.usage == tlsa::USAGE
-            && self.selector == tlsa::SELECTOR
-            && self.matching == tlsa::MATCHING
+        tlsa::is_dane_ee_spki_sha256(self.usage, self.selector, self.matching)
     }
 
     pub fn hash_matches(&self, live: &str) -> bool {

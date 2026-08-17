@@ -181,12 +181,12 @@ OK - TLSA is valid
 
 ### list
 
-Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--nsupdate` queries the configured primary (or AXFR when `PORTS` is omitted). `--info` fetches the live certificate and marks each hash current or stale. Omit `PORTS` to include every port (Cloudflare and AXFR can list the whole zone; public DNS is queried for each name found there).
+Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--nsupdate` queries the configured primary (or AXFR when `PORTS` is omitted). `--info` fetches the live certificate and marks each `3 1 1` hash current or stale. Other usage/selector/matching values are listed with their RFC 7218 names and are not compared to the live key. Omit `PORTS` to include every port (Cloudflare and AXFR can list the whole zone; public DNS is queried for each name found there).
 
 ```
 $ gentlsa list example.com 443
 >>> DNS _443._tcp.example.com.
-3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
+3 1 1 (DANE-EE SPKI SHA2-256) 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
 
 $ gentlsa list example.com 25,465
 $ gentlsa list example.com --cloudflare

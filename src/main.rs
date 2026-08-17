@@ -327,14 +327,6 @@ async fn generate(
     }
 }
 
-fn hash_status(live_hash: Option<&str>, record_hash: &str) -> Option<&'static str> {
-    match live_hash {
-        Some(live) if tlsa::hashes_equal(live, record_hash) => Some("current"),
-        Some(_) => Some("stale"),
-        None => None,
-    }
-}
-
 fn status_tag(status: Option<&str>) -> &'static str {
     match status {
         Some("current") => " (current)",
@@ -462,7 +454,7 @@ async fn list(
                     records: records
                         .iter()
                         .map(|record| {
-                            JsonTlsa::from_dns(record, hash_status(live, &record.certificate))
+                            JsonTlsa::from_dns(record, live)
                         })
                         .collect(),
                     error: None,
@@ -487,7 +479,7 @@ async fn list(
                 let live = tlsa::port_from_owner(&record.name)
                     .and_then(|port| live_by_port.get(&port))
                     .map(String::as_str);
-                JsonTlsa::from_cf(record, hash_status(live, &record.certificate))
+                JsonTlsa::from_cf(record, live)
             })
             .collect(),
     });
@@ -502,7 +494,7 @@ async fn list(
                     let live = tlsa::port_from_owner(&record.name)
                         .and_then(|port| live_by_port.get(&port))
                         .map(String::as_str);
-                    JsonTlsa::from_nsupdate(record, hash_status(live, &record.certificate))
+                    JsonTlsa::from_nsupdate(record, live)
                 })
                 .collect(),
             note: axfr_note.clone(),
@@ -530,7 +522,10 @@ async fn list(
     }
 
     for (port, hash) in &live_by_port {
-        println!("Live _{port}._tcp TLSA 3 1 1 {hash}");
+        println!(
+            "Live _{port}._tcp TLSA {}",
+            tlsa::rdata_text(tlsa::USAGE, tlsa::SELECTOR, tlsa::MATCHING, hash)
+        );
     }
 
     if let Some(note) = note {
@@ -619,7 +614,10 @@ async fn prune(
     let cert = fetch_live(&host, port)?;
     let live_hash = cert.spki_sha256_hex()?;
     verbose::step(format_args!("live SPKI SHA-256 {live_hash}"));
-    output::text(format!("Live TLSA 3 1 1 {live_hash}"));
+    output::text(format!(
+        "Live TLSA {}",
+        tlsa::rdata_text(tlsa::USAGE, tlsa::SELECTOR, tlsa::MATCHING, &live_hash)
+    ));
 
     let name = fqdn(zone_name, port, hostname);
     let mut dns_records = Vec::new();
@@ -629,17 +627,13 @@ async fn prune(
         }
         Ok(records) => {
             for record in &records {
-                let status = hash_status(Some(&live_hash), &record.certificate);
+                let listed = JsonTlsa::from_dns(record, Some(&live_hash));
                 output::text(format!(
-                    "DNS: {} {}",
-                    record,
-                    if status == Some("stale") {
-                        "(stale)"
-                    } else {
-                        "(current)"
-                    }
+                    "DNS: {}{}",
+                    listed.to_text(),
+                    status_tag(listed.status)
                 ));
-                dns_records.push(JsonTlsa::from_dns(record, status));
+                dns_records.push(listed);
             }
         }
         Err(err) => eprintln!("{err:#}"),
@@ -798,7 +792,7 @@ async fn verify(
     let dns = dns_record
         .iter()
         .map(|record| {
-            JsonTlsa::from_dns(record, hash_status(Some(&host_hash), &record.certificate))
+            JsonTlsa::from_dns(record, Some(&host_hash))
         })
         .collect();
 

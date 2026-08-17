@@ -130,8 +130,14 @@ pub struct JsonTlsa {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub usage: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_name: Option<&'static str>,
     pub selector: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector_name: Option<&'static str>,
     pub matching: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matching_name: Option<&'static str>,
     pub certificate: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<&'static str>,
@@ -179,47 +185,85 @@ pub struct FileRecord {
 }
 
 impl JsonTlsa {
-    pub fn from_dns(record: &TlsaRecord, status: Option<&'static str>) -> Self {
+    fn from_fields(
+        id: Option<String>,
+        name: Option<String>,
+        usage: u8,
+        selector: u8,
+        matching: u8,
+        certificate: String,
+        status: Option<&'static str>,
+    ) -> Self {
         Self {
-            id: None,
-            name: None,
-            usage: record.usage,
-            selector: record.selector,
-            matching: record.matching,
-            certificate: record.certificate.clone(),
+            id,
+            name,
+            usage,
+            usage_name: tlsa::usage_name(usage),
+            selector,
+            selector_name: tlsa::selector_name(selector),
+            matching,
+            matching_name: tlsa::matching_name(matching),
+            certificate,
             status,
         }
     }
 
-    pub fn to_text(&self) -> String {
-        format!(
-            "{} {} {} {}",
-            self.usage, self.selector, self.matching, self.certificate
+    pub fn from_dns(record: &TlsaRecord, live: Option<&str>) -> Self {
+        Self::from_fields(
+            None,
+            None,
+            record.usage,
+            record.selector,
+            record.matching,
+            record.certificate.clone(),
+            tlsa::hash_status(
+                live,
+                record.usage,
+                record.selector,
+                record.matching,
+                &record.certificate,
+            ),
         )
     }
 
-    pub fn from_cf(record: &ListedTlsa, status: Option<&'static str>) -> Self {
-        Self {
-            id: Some(record.id.clone()),
-            name: Some(record.name.clone()),
-            usage: record.usage,
-            selector: record.selector,
-            matching: record.matching,
-            certificate: record.certificate.clone(),
-            status,
-        }
+    pub fn to_text(&self) -> String {
+        tlsa::rdata_text(self.usage, self.selector, self.matching, &self.certificate)
     }
 
-    pub fn from_nsupdate(record: &NsupdateListed, status: Option<&'static str>) -> Self {
-        Self {
-            id: None,
-            name: Some(record.name.clone()),
-            usage: record.usage,
-            selector: record.selector,
-            matching: record.matching,
-            certificate: record.certificate.clone(),
-            status,
-        }
+    pub fn from_cf(record: &ListedTlsa, live: Option<&str>) -> Self {
+        Self::from_fields(
+            Some(record.id.clone()),
+            Some(record.name.clone()),
+            record.usage,
+            record.selector,
+            record.matching,
+            record.certificate.clone(),
+            tlsa::hash_status(
+                live,
+                record.usage,
+                record.selector,
+                record.matching,
+                &record.certificate,
+            ),
+        )
+    }
+
+    pub fn from_nsupdate(record: &NsupdateListed, live: Option<&str>) -> Self {
+        Self::from_fields(
+            None,
+            Some(record.name.clone()),
+            record.usage,
+            record.selector,
+            record.matching,
+            record.certificate.clone(),
+            tlsa::hash_status(
+                live,
+                record.usage,
+                record.selector,
+                record.matching,
+                &record.certificate,
+            ),
+        )
     }
 }
 
@@ -428,7 +472,7 @@ mod tests {
             message: ok_outcome.message,
             exit: ok_outcome.exit,
             live: Some(live.into()),
-            dns: vec![JsonTlsa::from_dns(&current[0], Some("current"))],
+            dns: vec![JsonTlsa::from_dns(&current[0], Some(live))],
             info: None,
         };
 
@@ -441,7 +485,7 @@ mod tests {
             message: err_outcome.message,
             exit: err_outcome.exit,
             live: Some(live.into()),
-            dns: vec![JsonTlsa::from_dns(&stale[0], Some("stale"))],
+            dns: vec![JsonTlsa::from_dns(&stale[0], Some(live))],
             info: None,
         };
 
@@ -459,6 +503,9 @@ mod tests {
         assert_eq!(value["results"][0]["exit"], 0);
         assert_eq!(value["results"][0]["message"], "OK - TLSA is valid");
         assert_eq!(value["results"][0]["dns"][0]["status"], "current");
+        assert_eq!(value["results"][0]["dns"][0]["usage_name"], "DANE-EE");
+        assert_eq!(value["results"][0]["dns"][0]["selector_name"], "SPKI");
+        assert_eq!(value["results"][0]["dns"][0]["matching_name"], "SHA2-256");
         assert_eq!(value["results"][1]["status"], "error");
         assert_eq!(value["results"][1]["exit"], 2);
         assert!(
@@ -468,5 +515,45 @@ mod tests {
                 .contains("ERROR - TLSA invalid")
         );
         assert!(value["results"][0].get("info").is_none());
+    }
+
+    #[test]
+    fn list_text_decodes_rfc7218_names() {
+        let current = tlsa("aabb");
+        let listed = JsonTlsa::from_dns(&current, Some("aabb"));
+        assert_eq!(
+            listed.to_text(),
+            "3 1 1 (DANE-EE SPKI SHA2-256) aabb"
+        );
+        assert_eq!(listed.status, Some("current"));
+        assert_eq!(listed.usage_name, Some("DANE-EE"));
+
+        let other = TlsaRecord {
+            usage: 2,
+            selector: 0,
+            matching: 1,
+            certificate: "cccc".into(),
+        };
+        let listed = JsonTlsa::from_dns(&other, Some("aabb"));
+        assert_eq!(
+            listed.to_text(),
+            "2 0 1 (DANE-TA Cert SHA2-256) cccc"
+        );
+        assert_eq!(listed.status, None);
+        assert_eq!(listed.usage_name, Some("DANE-TA"));
+        assert_eq!(listed.selector_name, Some("Cert"));
+
+        let reserved = TlsaRecord {
+            usage: 9,
+            selector: 1,
+            matching: 1,
+            certificate: "dddd".into(),
+        };
+        let listed = JsonTlsa::from_dns(&reserved, Some("aabb"));
+        assert_eq!(listed.to_text(), "9 1 1 (9 SPKI SHA2-256) dddd");
+        assert!(listed.usage_name.is_none());
+        let value = serde_json::to_value(&listed).unwrap();
+        assert!(value.get("usage_name").is_none());
+        assert_eq!(value["selector_name"], "SPKI");
     }
 }
