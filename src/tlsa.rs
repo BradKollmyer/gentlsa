@@ -85,4 +85,12 @@ mod tests {
         assert_eq!(port_from_owner("example.org"), None);
         assert_eq!(port_from_owner("_www._tcp.example.org"), None);
     }
+
+    #[test]
+    fn hashes_equal_is_case_insensitive() {
+        assert!(hashes_equal("aaBB", "AAbb"));
+        assert!(hashes_equal("deadbeef", "deadbeef"));
+        assert!(!hashes_equal("aa", "ab"));
+        assert!(!hashes_equal("aa", "aaa"));
+    }
 }

@@ -262,79 +262,75 @@ impl Client {
             info: None,
         };
 
-        if ours
-            .iter()
-            .any(|record| record.hash_matches(certificate) && record.is_dane_ee_spki_sha256())
-        {
+        let action = publish_action(&ours, certificate, mode, dryrun);
+        if action == PublishAction::AlreadyPublished {
             verbose::step("live hash already published, skipping");
             output::text(format!(
                 "Cloudflare: TLSA already published for {} ({owner})",
                 zone.name
             ));
-            return Ok(report(PublishAction::AlreadyPublished));
+            return Ok(report(action));
+        }
+
+        if mode == PublishMode::Rollover && !ours.is_empty() {
+            output::text(format!(
+                "Cloudflare: keeping {} existing TLSA record(s) for rollover",
+                ours.len()
+            ));
         }
 
         let payload = tlsa_payload(&owner, certificate);
-
-        match mode {
-            PublishMode::Replace => {
-                if let Some(existing) = ours
+        match action {
+            PublishAction::Replaced | PublishAction::WouldReplace => {
+                let existing = ours
                     .iter()
                     .find(|record| record.is_dane_ee_spki_sha256())
                     .copied()
-                {
-                    if dryrun {
-                        output::text(format!(
-                            "Cloudflare: dry run, would replace TLSA {} on {}",
-                            existing.id, zone.name
-                        ));
-                        return Ok(report(PublishAction::WouldReplace));
-                    }
-                    let _: DnsRecord = self
-                        .put_result(
-                            &format!("/zones/{}/dns_records/{}", zone.id, existing.id),
-                            &payload,
-                        )
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Something went screwy: {} - Error: update failed",
-                                zone.name
-                            )
-                        })?;
-                    output::text(format!("Cloudflare: TLSA record updated for {}", zone.name));
-                    return Ok(report(PublishAction::Replaced));
-                }
-            }
-            PublishMode::Rollover => {
-                if !ours.is_empty() {
+                    .expect("replace action requires an existing 3 1 1 record");
+                if action == PublishAction::WouldReplace {
                     output::text(format!(
-                        "Cloudflare: keeping {} existing TLSA record(s) for rollover",
-                        ours.len()
+                        "Cloudflare: dry run, would replace TLSA {} on {}",
+                        existing.id, zone.name
                     ));
+                    return Ok(report(action));
                 }
+                let _: DnsRecord = self
+                    .put_result(
+                        &format!("/zones/{}/dns_records/{}", zone.id, existing.id),
+                        &payload,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Something went screwy: {} - Error: update failed",
+                            zone.name
+                        )
+                    })?;
+                output::text(format!("Cloudflare: TLSA record updated for {}", zone.name));
+                Ok(report(action))
             }
+            PublishAction::Added | PublishAction::WouldAdd => {
+                if action == PublishAction::WouldAdd {
+                    output::text(format!(
+                        "Cloudflare: dry run, would add {owner} TLSA for {}",
+                        zone.name
+                    ));
+                    return Ok(report(action));
+                }
+                let _: DnsRecord = self
+                    .post_result(&format!("/zones/{}/dns_records", zone.id), &payload)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Something went screwy: {} - Error: create failed",
+                            zone.name
+                        )
+                    })?;
+                output::text(format!("Cloudflare: TLSA record added for {}", zone.name));
+                Ok(report(action))
+            }
+            PublishAction::AlreadyPublished => unreachable!("handled above"),
         }
-
-        if dryrun {
-            output::text(format!(
-                "Cloudflare: dry run, would add {owner} TLSA for {}",
-                zone.name
-            ));
-            return Ok(report(PublishAction::WouldAdd));
-        }
-
-        let _: DnsRecord = self
-            .post_result(&format!("/zones/{}/dns_records", zone.id), &payload)
-            .await
-            .with_context(|| {
-                format!(
-                    "Something went screwy: {} - Error: create failed",
-                    zone.name
-                )
-            })?;
-        output::text(format!("Cloudflare: TLSA record added for {}", zone.name));
-        Ok(report(PublishAction::Added))
     }
 
     pub async fn prune_tlsa(
@@ -351,14 +347,7 @@ impl Client {
         ));
         let expected = expected_names(zone, hostname, port);
         let records = self.tlsa_records(zone).await?;
-        let stale: Vec<&DnsRecord> = records
-            .iter()
-            .filter(|record| {
-                record.matches_owner(&expected)
-                    && record.is_dane_ee_spki_sha256()
-                    && !record.hash_matches(live_hash)
-            })
-            .collect();
+        let stale = stale_tlsa(&records, &expected, live_hash);
         verbose::step(format_args!("{} stale TLSA record(s)", stale.len()));
 
         let hashes: Vec<String> = stale
@@ -538,6 +527,47 @@ fn owner_host<'a>(name: &'a str, zone: &str) -> Option<&'a str> {
         .map(|s| s.strip_prefix('.').unwrap_or(""))
 }
 
+fn publish_action(
+    ours: &[&DnsRecord],
+    certificate: &str,
+    mode: PublishMode,
+    dryrun: bool,
+) -> PublishAction {
+    if ours
+        .iter()
+        .any(|record| record.hash_matches(certificate) && record.is_dane_ee_spki_sha256())
+    {
+        return PublishAction::AlreadyPublished;
+    }
+    if mode == PublishMode::Replace && ours.iter().any(|record| record.is_dane_ee_spki_sha256()) {
+        return if dryrun {
+            PublishAction::WouldReplace
+        } else {
+            PublishAction::Replaced
+        };
+    }
+    if dryrun {
+        PublishAction::WouldAdd
+    } else {
+        PublishAction::Added
+    }
+}
+
+fn stale_tlsa<'a>(
+    records: &'a [DnsRecord],
+    expected: &[String],
+    live_hash: &str,
+) -> Vec<&'a DnsRecord> {
+    records
+        .iter()
+        .filter(|record| {
+            record.matches_owner(expected)
+                && record.is_dane_ee_spki_sha256()
+                && !record.hash_matches(live_hash)
+        })
+        .collect()
+}
+
 fn tlsa_payload(owner: &str, certificate: &str) -> TlsaPayload {
     TlsaPayload {
         name: owner.to_string(),
@@ -707,28 +737,36 @@ mod tests {
     use super::*;
 
     fn record(name: &str, hash: &str) -> DnsRecord {
+        record_data(name, hash, 3, 1, 1)
+    }
+
+    fn record_data(name: &str, hash: &str, usage: u8, selector: u8, matching: u8) -> DnsRecord {
         DnsRecord {
             id: "id".into(),
             name: name.into(),
             record_type: "TLSA".into(),
             data: Some(TlsaData {
-                usage: 3,
-                selector: 1,
-                matching_type: 1,
+                usage,
+                selector,
+                matching_type: matching,
                 certificate: hash.into(),
             }),
         }
     }
 
-    #[test]
-    fn owner_and_hash_matching() {
-        let zone = Zone {
+    fn example_zone() -> Zone {
+        Zone {
             id: "z".into(),
             name: "example.org".into(),
             name_servers: vec![],
             owner: None,
             account: None,
-        };
+        }
+    }
+
+    #[test]
+    fn owner_and_hash_matching() {
+        let zone = example_zone();
         let names = expected_names(&zone, Some("mx"), 25);
         let rec = record("_25._tcp.mx.example.org", "AA");
         assert!(rec.matches_owner(&names));
@@ -739,13 +777,7 @@ mod tests {
 
     #[test]
     fn list_filter_any_or_selected_ports() {
-        let zone = Zone {
-            id: "z".into(),
-            name: "example.org".into(),
-            name_servers: vec![],
-            owner: None,
-            account: None,
-        };
+        let zone = example_zone();
         assert!(record_matches("_443._tcp.example.org", &zone, None, &[]));
         assert!(record_matches("_25._tcp.mx.example.org", &zone, None, &[]));
         assert!(record_matches(
@@ -778,5 +810,74 @@ mod tests {
             None,
             &[25, 465]
         ));
+    }
+
+    #[test]
+    fn publish_action_table() {
+        let existing = record("_25._tcp.mx.example.org", "AA");
+        let other = record_data("_25._tcp.mx.example.org", "AA", 2, 1, 1);
+        let ours = [&existing];
+
+        assert_eq!(
+            publish_action(&ours, "aa", PublishMode::Rollover, false),
+            PublishAction::AlreadyPublished
+        );
+        assert_eq!(
+            publish_action(&ours, "aa", PublishMode::Replace, true),
+            PublishAction::AlreadyPublished
+        );
+
+        assert_eq!(
+            publish_action(&ours, "bb", PublishMode::Rollover, false),
+            PublishAction::Added
+        );
+        assert_eq!(
+            publish_action(&ours, "bb", PublishMode::Rollover, true),
+            PublishAction::WouldAdd
+        );
+
+        assert_eq!(
+            publish_action(&ours, "bb", PublishMode::Replace, false),
+            PublishAction::Replaced
+        );
+        assert_eq!(
+            publish_action(&ours, "bb", PublishMode::Replace, true),
+            PublishAction::WouldReplace
+        );
+
+        assert_eq!(
+            publish_action(&[], "aa", PublishMode::Replace, false),
+            PublishAction::Added
+        );
+        assert_eq!(
+            publish_action(&[], "aa", PublishMode::Rollover, true),
+            PublishAction::WouldAdd
+        );
+        assert_eq!(
+            publish_action(&[&other], "bb", PublishMode::Replace, false),
+            PublishAction::Added
+        );
+    }
+
+    #[test]
+    fn prune_only_stale_dane_ee() {
+        let zone = example_zone();
+        let expected = expected_names(&zone, Some("mx"), 25);
+        let current = record("_25._tcp.mx.example.org", "AA");
+        let stale = record("_25._tcp.mx.example.org", "BB");
+        let other_port = record("_443._tcp.example.org", "CC");
+        let other_selector = record_data("_25._tcp.mx.example.org", "DD", 3, 0, 1);
+
+        let records = [current, stale, other_port, other_selector];
+        let found = stale_tlsa(&records, &expected, "aa");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].data.as_ref().map(|data| data.certificate.as_str()),
+            Some("BB")
+        );
+
+        let current_only = [record("_25._tcp.mx.example.org", "aa")];
+        let none = stale_tlsa(&current_only, &expected, "AA");
+        assert!(none.is_empty());
     }
 }

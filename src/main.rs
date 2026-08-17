@@ -12,12 +12,12 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use crate::cert::{Certificate, fetch_live};
+use crate::cert::{CertDetails, Certificate, fetch_live};
 use crate::cli::{Cli, Command};
 use crate::cloudflare::Client as Cloudflare;
 use crate::report::{
     CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, PruneResult, Report,
-    VerifyResult, ZoneRef,
+    VerifyResult, ZoneRef, verify_outcome, worst_verify_exit,
 };
 use crate::tlsa::{connect_host, fqdn};
 
@@ -125,15 +125,11 @@ async fn run() -> Result<u8> {
         } => {
             let ports = ports.as_slice();
             let multi = ports.len() > 1;
-            let mut worst = 0;
             let mut results = Vec::new();
             for port in ports {
-                let result = verify(&zone, *port, hostname.as_deref(), info, multi).await;
-                if result.exit > worst {
-                    worst = result.exit;
-                }
-                results.push(result);
+                results.push(verify(&zone, *port, hostname.as_deref(), info, multi).await);
             }
+            let worst = worst_verify_exit(results.iter().map(|result| result.exit));
             if output::is_json() {
                 output::emit(&Report::Verify {
                     zone,
@@ -569,16 +565,21 @@ async fn verify(
         }
     };
 
-    let unknown = |message: &str, name: String, live, dns, info| VerifyResult {
-        port,
-        name,
-        status: "unknown",
-        message: message.to_string(),
-        exit: 3,
-        live,
-        dns,
-        info,
-    };
+    let fail =
+        |name: String, live: Option<String>, dns: Vec<JsonTlsa>, info: Option<CertDetails>| {
+            let outcome = verify_outcome(live.as_deref(), &[]);
+            say(&outcome.message);
+            VerifyResult {
+                port,
+                name,
+                status: outcome.status,
+                message: outcome.message,
+                exit: outcome.exit,
+                live,
+                dns,
+                info,
+            }
+        };
 
     let host = connect_host(zone, hostname);
     verbose::step(format_args!("verify {host}:{port}"));
@@ -587,14 +588,7 @@ async fn verify(
         Ok(record) => record,
         Err(err) => {
             eprintln!("{err:#}");
-            say("UNKNOWN - Something went wrong. Check logs");
-            return unknown(
-                "UNKNOWN - Something went wrong. Check logs",
-                name,
-                None,
-                Vec::new(),
-                None,
-            );
+            return fail(name, None, Vec::new(), None);
         }
     };
 
@@ -602,9 +596,7 @@ async fn verify(
         Ok(cert) => cert,
         Err(err) => {
             eprintln!("{err:#}");
-            say("UNKNOWN - Something went wrong. Check logs");
-            return unknown(
-                "UNKNOWN - Something went wrong. Check logs",
+            return fail(
                 name,
                 None,
                 dns_record
@@ -622,9 +614,7 @@ async fn verify(
                 Ok(details) => Some(details),
                 Err(err) => {
                     eprintln!("{err:#}");
-                    say("UNKNOWN - Something went wrong. Check logs");
-                    return unknown(
-                        "UNKNOWN - Something went wrong. Check logs",
+                    return fail(
                         name,
                         None,
                         dns_record
@@ -637,9 +627,7 @@ async fn verify(
             }
         } else if let Err(err) = cert.print_info(hostname, &[port], true) {
             eprintln!("{err:#}");
-            say("UNKNOWN - Something went wrong. Check logs");
-            return unknown(
-                "UNKNOWN - Something went wrong. Check logs",
+            return fail(
                 name,
                 None,
                 dns_record
@@ -659,9 +647,7 @@ async fn verify(
         Ok(hash) => hash,
         Err(err) => {
             eprintln!("{err:#}");
-            say("UNKNOWN - Something went wrong. Check logs");
-            return unknown(
-                "UNKNOWN - Something went wrong. Check logs",
+            return fail(
                 name,
                 None,
                 dns_record
@@ -680,55 +666,24 @@ async fn verify(
         })
         .collect();
 
-    if dns_record.is_empty() {
-        verbose::step(format_args!("no TLSA records at {name}"));
-        say("UNKNOWN - Something went wrong. Check logs");
-        return unknown(
-            "UNKNOWN - Something went wrong. Check logs",
-            name,
-            Some(host_hash),
-            dns,
-            info_block,
-        );
-    }
-
-    if dns_record
-        .iter()
-        .any(|record| tlsa::hashes_equal(&host_hash, &record.certificate))
-    {
-        verbose::step("live hash matches a DNS TLSA record");
-        say("OK - TLSA is valid");
-        VerifyResult {
-            port,
-            name,
-            status: "ok",
-            message: "OK - TLSA is valid".into(),
-            exit: 0,
-            live: Some(host_hash),
-            dns,
-            info: info_block,
-        }
-    } else {
-        verbose::step(format_args!(
+    let outcome = verify_outcome(Some(&host_hash), &dns_record);
+    match outcome.exit {
+        0 => verbose::step("live hash matches a DNS TLSA record"),
+        2 => verbose::step(format_args!(
             "live hash {host_hash} does not match any DNS TLSA record"
-        ));
-        let dns_text = dns_record
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let message = format!("ERROR - TLSA invalid: {host_hash} != {dns_text}");
-        say(&message);
-        VerifyResult {
-            port,
-            name,
-            status: "error",
-            message,
-            exit: 2,
-            live: Some(host_hash),
-            dns,
-            info: info_block,
-        }
+        )),
+        _ => verbose::step(format_args!("no TLSA records at {name}")),
+    }
+    say(&outcome.message);
+    VerifyResult {
+        port,
+        name,
+        status: outcome.status,
+        message: outcome.message,
+        exit: outcome.exit,
+        live: Some(host_hash),
+        dns,
+        info: info_block,
     }
 }
 

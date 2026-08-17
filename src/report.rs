@@ -210,6 +210,56 @@ impl GenerateResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyOutcome {
+    pub status: &'static str,
+    pub message: String,
+    pub exit: u8,
+}
+
+/// Nagios-style verdict from a live hash and the DNS TLSA set.
+pub fn verify_outcome(live: Option<&str>, dns: &[TlsaRecord]) -> VerifyOutcome {
+    const UNKNOWN: &str = "UNKNOWN - Something went wrong. Check logs";
+    let Some(live) = live else {
+        return VerifyOutcome {
+            status: "unknown",
+            message: UNKNOWN.into(),
+            exit: 3,
+        };
+    };
+    if dns.is_empty() {
+        return VerifyOutcome {
+            status: "unknown",
+            message: UNKNOWN.into(),
+            exit: 3,
+        };
+    }
+    if dns
+        .iter()
+        .any(|record| tlsa::hashes_equal(live, &record.certificate))
+    {
+        return VerifyOutcome {
+            status: "ok",
+            message: "OK - TLSA is valid".into(),
+            exit: 0,
+        };
+    }
+    let dns_text = dns
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    VerifyOutcome {
+        status: "error",
+        message: format!("ERROR - TLSA invalid: {live} != {dns_text}"),
+        exit: 2,
+    }
+}
+
+pub fn worst_verify_exit(exits: impl IntoIterator<Item = u8>) -> u8 {
+    exits.into_iter().max().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +296,138 @@ mod tests {
             "C=US, O=GenTLSA Test, CN=test.example"
         );
         assert!(value.get("cloudflare").is_none());
+    }
+
+    fn tlsa(hash: &str) -> TlsaRecord {
+        TlsaRecord {
+            usage: tlsa::USAGE,
+            selector: tlsa::SELECTOR,
+            matching: tlsa::MATCHING,
+            certificate: hash.into(),
+        }
+    }
+
+    #[test]
+    fn verify_outcome_table() {
+        let live = "aabbcc";
+
+        let ok = verify_outcome(Some(live), &[tlsa("AABBCC")]);
+        assert_eq!(ok.status, "ok");
+        assert_eq!(ok.exit, 0);
+        assert_eq!(ok.message, "OK - TLSA is valid");
+
+        let mixed = verify_outcome(Some(live), &[tlsa("dddddd"), tlsa("AABBCC")]);
+        assert_eq!(mixed.exit, 0);
+
+        let err = verify_outcome(Some(live), &[tlsa("dddddd")]);
+        assert_eq!(err.status, "error");
+        assert_eq!(err.exit, 2);
+        assert!(err.message.contains(live));
+        assert!(err.message.contains("3 1 1 dddddd"));
+
+        let no_dns = verify_outcome(Some(live), &[]);
+        assert_eq!((no_dns.status, no_dns.exit), ("unknown", 3));
+
+        let no_live = verify_outcome(None, &[tlsa("AABBCC")]);
+        assert_eq!((no_live.status, no_live.exit), ("unknown", 3));
+
+        let neither = verify_outcome(None, &[]);
+        assert_eq!(neither.exit, 3);
+        assert_eq!(
+            neither.message,
+            "UNKNOWN - Something went wrong. Check logs"
+        );
+    }
+
+    #[test]
+    fn worst_verify_exit_takes_max() {
+        assert_eq!(worst_verify_exit([0, 0]), 0);
+        assert_eq!(worst_verify_exit([0, 2]), 2);
+        assert_eq!(worst_verify_exit([0, 3, 2]), 3);
+        assert_eq!(worst_verify_exit([2, 0, 3]), 3);
+        assert_eq!(worst_verify_exit(std::iter::empty()), 0);
+    }
+
+    #[test]
+    fn generate_report_json_shape() {
+        let hash = "ff94ad7dfafffed26e98150947dd8b1a7d981fabf90740c574685c81d487b9a8";
+        let report = Report::Generate {
+            zone: "example.com".into(),
+            hostname: None,
+            results: vec![GenerateResult::from_cert(
+                443,
+                "example.com".into(),
+                None,
+                hash.into(),
+                None,
+            )],
+        };
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["command"], "generate");
+        assert_eq!(value["zone"], "example.com");
+        assert!(value.get("hostname").is_none());
+        assert_eq!(value["results"][0]["port"], 443);
+        assert_eq!(value["results"][0]["owner"], "_443._tcp");
+        assert_eq!(value["results"][0]["usage"], 3);
+        assert_eq!(value["results"][0]["selector"], 1);
+        assert_eq!(value["results"][0]["matching"], 1);
+        assert_eq!(value["results"][0]["certificate"], hash);
+        assert!(value["results"][0].get("cloudflare").is_none());
+        assert!(value["results"][0].get("error").is_none());
+        assert!(value["results"][0].get("info").is_none());
+    }
+
+    #[test]
+    fn verify_report_json_shape() {
+        let live = "aabb";
+        let current = [tlsa(live)];
+        let ok_outcome = verify_outcome(Some(live), &current);
+        let ok = VerifyResult {
+            port: 443,
+            name: "_443._tcp.example.com.".into(),
+            status: ok_outcome.status,
+            message: ok_outcome.message,
+            exit: ok_outcome.exit,
+            live: Some(live.into()),
+            dns: vec![JsonTlsa::from_dns(&current[0], Some("current"))],
+            info: None,
+        };
+
+        let stale = [tlsa("cccc")];
+        let err_outcome = verify_outcome(Some(live), &stale);
+        let err = VerifyResult {
+            port: 25,
+            name: "_25._tcp.example.com.".into(),
+            status: err_outcome.status,
+            message: err_outcome.message,
+            exit: err_outcome.exit,
+            live: Some(live.into()),
+            dns: vec![JsonTlsa::from_dns(&stale[0], Some("stale"))],
+            info: None,
+        };
+
+        let report = Report::Verify {
+            zone: "example.com".into(),
+            hostname: None,
+            results: vec![ok, err],
+            exit: worst_verify_exit([0, 2]),
+        };
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["command"], "verify");
+        assert_eq!(value["exit"], 2);
+        assert!(value.get("hostname").is_none());
+        assert_eq!(value["results"][0]["status"], "ok");
+        assert_eq!(value["results"][0]["exit"], 0);
+        assert_eq!(value["results"][0]["message"], "OK - TLSA is valid");
+        assert_eq!(value["results"][0]["dns"][0]["status"], "current");
+        assert_eq!(value["results"][1]["status"], "error");
+        assert_eq!(value["results"][1]["exit"], 2);
+        assert!(
+            value["results"][1]["message"]
+                .as_str()
+                .unwrap()
+                .contains("ERROR - TLSA invalid")
+        );
+        assert!(value["results"][0].get("info").is_none());
     }
 }
