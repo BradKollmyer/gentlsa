@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Accept a comma-separated port list (`25,465`) on generate, list, prune, verify, and file
+- `list` with no ports shows records for every port
 - CI: `cargo test --release` and a binary smoke test on Linux, macOS, Windows (x86_64 and arm64), and FreeBSD 14 amd64
 
 ## 0.3.4 - 2026-08-16

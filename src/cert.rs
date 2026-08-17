@@ -63,12 +63,7 @@ impl Certificate {
         Ok(hex::encode(Sha256::digest(&self.der)))
     }
 
-    pub fn print_info(
-        &self,
-        hostname: Option<&str>,
-        port: Option<u16>,
-        show_info: bool,
-    ) -> Result<()> {
+    pub fn print_info(&self, hostname: Option<&str>, ports: &[u16], show_info: bool) -> Result<()> {
         let cert = self.parsed()?;
         if show_info {
             println!(">>> Certificate Information:");
@@ -89,14 +84,17 @@ impl Certificate {
         }
 
         let hash = self.spki_sha256_hex()?;
-        match port {
-            Some(port) => println!("{}", tlsa::record_line(&owner_name(port, hostname), &hash)),
-            None => println!(
+        if ports.is_empty() {
+            println!(
                 "TLSA {} {} {} {hash}",
                 tlsa::USAGE,
                 tlsa::SELECTOR,
                 tlsa::MATCHING
-            ),
+            );
+        } else {
+            for port in ports {
+                println!("{}", tlsa::record_line(&owner_name(*port, hostname), &hash));
+            }
         }
         Ok(())
     }

@@ -34,72 +34,109 @@ async fn run() -> Result<u8> {
     match Cli::parse().command {
         Command::Generate {
             zone,
-            port,
+            ports,
             hostname,
             info,
             cloudflare,
             replace,
             dryrun,
         } => {
-            generate(
-                &zone,
-                port,
-                hostname.as_deref(),
-                info,
-                cloudflare,
-                replace,
-                dryrun,
-            )
-            .await
+            let mut code = 0;
+            for port in ports.as_slice() {
+                code = generate(
+                    &zone,
+                    *port,
+                    hostname.as_deref(),
+                    info,
+                    cloudflare,
+                    replace,
+                    dryrun,
+                )
+                .await?;
+            }
+            Ok(code)
         }
         Command::List {
             zone,
-            port,
+            ports,
             hostname,
             cloudflare,
             info,
-        } => list(&zone, port, hostname.as_deref(), cloudflare, info).await,
+        } => {
+            list(
+                &zone,
+                ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]),
+                hostname.as_deref(),
+                cloudflare,
+                info,
+            )
+            .await
+        }
         Command::Prune {
             zone,
-            port,
+            ports,
             hostname,
             cloudflare,
             dryrun,
-        } => prune(&zone, port, hostname.as_deref(), cloudflare, dryrun).await,
+        } => {
+            let mut code = 0;
+            for port in ports.as_slice() {
+                code = prune(&zone, *port, hostname.as_deref(), cloudflare, dryrun).await?;
+            }
+            Ok(code)
+        }
         Command::Verify {
             zone,
-            port,
+            ports,
             hostname,
             info,
-        } => Ok(verify(&zone, port, hostname.as_deref(), info).await),
+        } => {
+            let ports = ports.as_slice();
+            let multi = ports.len() > 1;
+            let mut worst = 0;
+            for port in ports {
+                let code = verify(&zone, *port, hostname.as_deref(), info, multi).await;
+                if code > worst {
+                    worst = code;
+                }
+            }
+            Ok(worst)
+        }
         Command::Cloudflare { info, listzones } => cloudflare_cmd(info, listzones).await,
         Command::File {
             certfile,
             zone,
             hostname,
-            port,
+            ports,
             info,
             cloudflare,
             replace,
             dryrun,
         } => {
+            let ports = ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]);
             let cert = Certificate::from_file(&certfile)?;
-            cert.print_info(hostname.as_deref(), port, info)?;
+            cert.print_info(hostname.as_deref(), ports, info)?;
             if cloudflare {
                 let zone = zone
                     .as_deref()
                     .context("--zone is required with --cloudflare")?;
-                let port = port.context("--port is required with --cloudflare")?;
-                return update_cloudflare(
-                    zone,
-                    hostname.as_deref(),
-                    port,
-                    &cert,
-                    info,
-                    replace,
-                    dryrun,
-                )
-                .await;
+                if ports.is_empty() {
+                    anyhow::bail!("--port is required with --cloudflare");
+                }
+                let mut code = 0;
+                for port in ports {
+                    code = update_cloudflare(
+                        zone,
+                        hostname.as_deref(),
+                        *port,
+                        &cert,
+                        info,
+                        replace,
+                        dryrun,
+                    )
+                    .await?;
+                }
+                return Ok(code);
             }
             Ok(0)
         }
@@ -117,7 +154,7 @@ async fn generate(
 ) -> Result<u8> {
     let host = connect_host(zone, hostname);
     let cert = fetch_live(&host, port)?;
-    cert.print_info(hostname, Some(port), info)?;
+    cert.print_info(hostname, &[port], info)?;
 
     if use_cloudflare {
         return update_cloudflare(zone, hostname, port, &cert, info, replace, dryrun).await;
@@ -141,58 +178,111 @@ async fn live_hash(zone: &str, port: u16, hostname: Option<&str>) -> Option<Stri
 
 async fn list(
     zone_name: &str,
-    port: u16,
+    ports: &[u16],
     hostname: Option<&str>,
     use_cloudflare: bool,
     info: bool,
 ) -> Result<u8> {
-    let name = fqdn(zone_name, port, hostname);
-    let live = if info {
-        live_hash(zone_name, port, hostname).await
-    } else {
-        None
-    };
-    if let Some(hash) = &live {
-        println!("Live TLSA 3 1 1 {hash}");
-    }
-
-    println!(">>> DNS {name}");
-    match dns::lookup_tlsa(&name).await {
-        Ok(records) if records.is_empty() => println!("(none)"),
-        Ok(records) => {
-            for record in records {
-                println!(
-                    "{}{}",
-                    record,
-                    hash_tag(live.as_deref(), &record.certificate)
-                );
-            }
-        }
-        Err(err) => {
-            eprintln!("{err:#}");
-            println!("(lookup failed)");
-        }
-    }
-
-    if use_cloudflare {
+    let cf_listed = if use_cloudflare {
         let cf = Cloudflare::from_env_or_config()
             .context("Please install/configure Cloudflare credentials for this to work.")?;
         let Some(zone) = cf.zone_by_name(zone_name).await? else {
             println!("Not managed by cloudflare. Bailing.");
             return Ok(1);
         };
-        println!(">>> Cloudflare {}", zone.name);
-        let records = cf.list_tlsa(&zone, hostname, port).await?;
+        let records = cf.list_tlsa(&zone, hostname, ports).await?;
+        Some((zone.name, records))
+    } else {
+        None
+    };
+
+    let dns_names = if !ports.is_empty() {
+        ports
+            .iter()
+            .map(|port| fqdn(zone_name, *port, hostname))
+            .collect()
+    } else if let Some((_, records)) = &cf_listed {
+        let mut names = Vec::new();
+        for record in records {
+            if !names
+                .iter()
+                .any(|name: &String| name.eq_ignore_ascii_case(&record.name))
+            {
+                names.push(record.name.clone());
+            }
+        }
+        names
+    } else {
+        Vec::new()
+    };
+
+    let live_by_port = if info {
+        let mut hashes = std::collections::BTreeMap::new();
+        let info_ports: Vec<u16> = if !ports.is_empty() {
+            ports.to_vec()
+        } else {
+            dns_names
+                .iter()
+                .filter_map(|name| tlsa::port_from_owner(name))
+                .collect()
+        };
+        for port in info_ports {
+            if let Some(hash) = live_hash(zone_name, port, hostname).await {
+                hashes.insert(port, hash);
+            }
+        }
+        hashes
+    } else {
+        std::collections::BTreeMap::new()
+    };
+
+    for (port, hash) in &live_by_port {
+        println!("Live _{port}._tcp TLSA 3 1 1 {hash}");
+    }
+
+    if ports.is_empty() && dns_names.is_empty() && cf_listed.is_none() {
+        println!(">>> DNS");
+        println!("(no port specified; pass 443 or 25,465 to query public DNS)");
+    } else if dns_names.is_empty() {
+        println!(">>> DNS");
+        println!("(none)");
+    } else {
+        for name in &dns_names {
+            let port = tlsa::port_from_owner(name);
+            let live = port
+                .and_then(|port| live_by_port.get(&port))
+                .map(String::as_str);
+            println!(">>> DNS {name}");
+            match dns::lookup_tlsa(name).await {
+                Ok(records) if records.is_empty() => println!("(none)"),
+                Ok(records) => {
+                    for record in records {
+                        println!("{}{}", record, hash_tag(live, &record.certificate));
+                    }
+                }
+                Err(err) => {
+                    eprintln!("{err:#}");
+                    println!("(lookup failed)");
+                }
+            }
+        }
+    }
+
+    if let Some((zone, records)) = &cf_listed {
+        println!(">>> Cloudflare {zone}");
         if records.is_empty() {
             println!("(none)");
         } else {
             for record in records {
+                let live = tlsa::port_from_owner(&record.name)
+                    .and_then(|port| live_by_port.get(&port))
+                    .map(String::as_str);
                 println!(
                     "{}  {}  {}{}",
                     record.id,
                     record.name,
                     record.to_text(),
-                    hash_tag(live.as_deref(), &record.certificate)
+                    hash_tag(live, &record.certificate)
                 );
             }
         }
@@ -241,13 +331,21 @@ async fn prune(
     Ok(0)
 }
 
-async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool) -> u8 {
+async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefix: bool) -> u8 {
+    let say = |msg: &str| {
+        if prefix {
+            println!("{port}: {msg}");
+        } else {
+            println!("{msg}");
+        }
+    };
+
     let name = fqdn(zone, port, hostname);
     let dns_record = match dns::lookup_tlsa(&name).await {
         Ok(record) => record,
         Err(err) => {
             eprintln!("{err:#}");
-            println!("UNKNOWN - Something went wrong. Check logs");
+            say("UNKNOWN - Something went wrong. Check logs");
             return 3;
         }
     };
@@ -257,14 +355,14 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool) -> u8
         Ok(cert) => cert,
         Err(err) => {
             eprintln!("{err:#}");
-            println!("UNKNOWN - Something went wrong. Check logs");
+            say("UNKNOWN - Something went wrong. Check logs");
             return 3;
         }
     };
 
-    if info && let Err(err) = cert.print_info(hostname, Some(port), true) {
+    if info && let Err(err) = cert.print_info(hostname, &[port], true) {
         eprintln!("{err:#}");
-        println!("UNKNOWN - Something went wrong. Check logs");
+        say("UNKNOWN - Something went wrong. Check logs");
         return 3;
     }
 
@@ -272,13 +370,13 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool) -> u8
         Ok(hash) => hash,
         Err(err) => {
             eprintln!("{err:#}");
-            println!("UNKNOWN - Something went wrong. Check logs");
+            say("UNKNOWN - Something went wrong. Check logs");
             return 3;
         }
     };
 
     if dns_record.is_empty() {
-        println!("UNKNOWN - Something went wrong. Check logs");
+        say("UNKNOWN - Something went wrong. Check logs");
         return 3;
     }
 
@@ -286,7 +384,7 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool) -> u8
         .iter()
         .any(|record| tlsa::hashes_equal(&host_hash, &record.certificate))
     {
-        println!("OK - TLSA is valid");
+        say("OK - TLSA is valid");
         0
     } else {
         let dns_text = dns_record
@@ -294,7 +392,7 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool) -> u8
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        println!("ERROR - TLSA invalid: {host_hash} != {dns_text}");
+        say(&format!("ERROR - TLSA invalid: {host_hash} != {dns_text}"));
         2
     }
 }

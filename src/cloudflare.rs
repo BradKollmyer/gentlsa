@@ -154,13 +154,12 @@ impl Client {
         &self,
         zone: &Zone,
         hostname: Option<&str>,
-        port: u16,
+        ports: &[u16],
     ) -> Result<Vec<ListedTlsa>> {
-        let expected = expected_names(zone, hostname, port);
         let records = self.tlsa_records(zone).await?;
         Ok(records
             .into_iter()
-            .filter(|record| record.matches_owner(&expected))
+            .filter(|record| record_matches(&record.name, zone, hostname, ports))
             .filter_map(|record| {
                 let data = record.data?;
                 Some(ListedTlsa {
@@ -400,6 +399,44 @@ fn expected_names(zone: &Zone, hostname: Option<&str>, port: u16) -> Vec<String>
     names
 }
 
+fn record_matches(name: &str, zone: &Zone, hostname: Option<&str>, ports: &[u16]) -> bool {
+    if !ports.is_empty() {
+        return expected_names_for_ports(zone, hostname, ports)
+            .iter()
+            .any(|expected| expected.eq_ignore_ascii_case(name));
+    }
+    let Some(host) = hostname.filter(|host| !host.is_empty()) else {
+        return true;
+    };
+    owner_host(name, &zone.name)
+        .is_some_and(|labels| labels.is_empty() || labels.eq_ignore_ascii_case(host))
+}
+
+fn expected_names_for_ports(zone: &Zone, hostname: Option<&str>, ports: &[u16]) -> Vec<String> {
+    ports
+        .iter()
+        .flat_map(|port| expected_names(zone, hostname, *port))
+        .collect()
+}
+
+/// Host labels after `_<port>._tcp` and before the zone, if the name is a TLSA owner.
+fn owner_host<'a>(name: &'a str, zone: &str) -> Option<&'a str> {
+    let name = name.trim_end_matches('.');
+    let zone = zone.trim_end_matches('.');
+    if name.len() <= zone.len() {
+        return None;
+    }
+    let (head, tail) = name.split_at(name.len() - zone.len());
+    if !tail.eq_ignore_ascii_case(zone) {
+        return None;
+    }
+    let rest = head.trim_end_matches('.');
+    let rest = rest.strip_prefix('_')?;
+    let (_, rest) = rest.split_once('.')?;
+    rest.strip_prefix("_tcp")
+        .map(|s| s.strip_prefix('.').unwrap_or(""))
+}
+
 fn tlsa_payload(owner: &str, certificate: &str) -> TlsaPayload {
     TlsaPayload {
         name: owner.to_string(),
@@ -591,5 +628,48 @@ mod tests {
         assert!(rec.is_dane_ee_spki_sha256());
         assert!(rec.hash_matches("aa"));
         assert!(!rec.hash_matches("bb"));
+    }
+
+    #[test]
+    fn list_filter_any_or_selected_ports() {
+        let zone = Zone {
+            id: "z".into(),
+            name: "example.org".into(),
+            name_servers: vec![],
+            owner: None,
+            account: None,
+        };
+        assert!(record_matches("_443._tcp.example.org", &zone, None, &[]));
+        assert!(record_matches("_25._tcp.mx.example.org", &zone, None, &[]));
+        assert!(record_matches(
+            "_25._tcp.mx.example.org",
+            &zone,
+            Some("mx"),
+            &[]
+        ));
+        assert!(!record_matches(
+            "_25._tcp.www.example.org",
+            &zone,
+            Some("mx"),
+            &[]
+        ));
+        assert!(record_matches(
+            "_25._tcp.mx.example.org",
+            &zone,
+            Some("mx"),
+            &[25, 465]
+        ));
+        assert!(!record_matches(
+            "_443._tcp.example.org",
+            &zone,
+            None,
+            &[25, 465]
+        ));
+        assert!(record_matches(
+            "_465._tcp.example.org",
+            &zone,
+            None,
+            &[25, 465]
+        ));
     }
 }

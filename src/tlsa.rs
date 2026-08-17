@@ -22,6 +22,17 @@ pub fn connect_host(zone: &str, hostname: Option<&str>) -> String {
     }
 }
 
+/// Port from a TLSA owner name such as `_25._tcp.mx.example.org`.
+pub fn port_from_owner(name: &str) -> Option<u16> {
+    let name = name.trim_end_matches('.');
+    let rest = name.strip_prefix('_')?;
+    let (port, rest) = rest.split_once('.')?;
+    if !rest.starts_with("_tcp") {
+        return None;
+    }
+    port.parse().ok()
+}
+
 pub fn uses_starttls(port: u16) -> bool {
     matches!(port, 25 | 587)
 }
@@ -65,5 +76,13 @@ mod tests {
         assert!(uses_starttls(587));
         assert!(!uses_starttls(443));
         assert!(!uses_starttls(465));
+    }
+
+    #[test]
+    fn port_from_owner_name() {
+        assert_eq!(port_from_owner("_443._tcp.example.org."), Some(443));
+        assert_eq!(port_from_owner("_25._tcp.mx.example.org"), Some(25));
+        assert_eq!(port_from_owner("example.org"), None);
+        assert_eq!(port_from_owner("_www._tcp.example.org"), None);
     }
 }

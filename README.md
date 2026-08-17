@@ -77,15 +77,15 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa generate <ZONE> <PORT> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
-gentlsa list <ZONE> <PORT> [--hostname <HOSTNAME>] [--cloudflare] [--info]
-gentlsa prune <ZONE> <PORT> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
-gentlsa verify <ZONE> <PORT> [--hostname <HOSTNAME>] [--info]
+gentlsa generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
+gentlsa list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare] [--info]
+gentlsa prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
+gentlsa verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
 gentlsa cloudflare [--info] [--listzones]
-gentlsa file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORT>] [--cloudflare]
+gentlsa file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare]
 ```
 
-`--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
+`--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
 
 ### generate
 
@@ -142,13 +142,15 @@ OK - TLSA is valid
 
 ### list
 
-Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--info` fetches the live certificate and marks each hash current or stale.
+Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--info` fetches the live certificate and marks each hash current or stale. Omit `PORTS` to include every port (Cloudflare can list the whole zone; public DNS is queried for each name found there).
 
 ```
 $ gentlsa list example.com 443
 >>> DNS _443._tcp.example.com.
 3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
 
+$ gentlsa list example.com 25,465
+$ gentlsa list example.com --cloudflare
 $ gentlsa list example.com 443 --cloudflare --info
 ```
 
