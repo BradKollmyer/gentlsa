@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Ship `gentlsa(1)` and `gentlsa(5)` man pages in the RPM, deb, and FreeBSD packages
+
 ## 0.4.3 - 2026-08-17
 
 - `rollover` waits 2× the TLSA TTL before reload and again before prune (RFC 7671 §8.1)

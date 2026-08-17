@@ -58,6 +58,10 @@ jobs:
         shell: bash
         run: bash scripts/smoke-test.sh
 
+      - name: Check man pages
+        if: runner.os != 'Windows'
+        run: bash scripts/check-man.sh
+
   freebsd:
     name: FreeBSD amd64
     runs-on: ubuntu-24.04
@@ -88,7 +92,10 @@ jobs:
             rustc --version
             cargo test --release --locked
             cargo build --release --locked
+            sh scripts/check-man.sh
             sh scripts/smoke-test.sh target/release/gentlsa
             sh scripts/build-pkg.sh --from-bin target/release/gentlsa
             pkg add target/freebsd/gentlsa.amd64.pkg
             sh scripts/smoke-test.sh /usr/local/bin/gentlsa
+            test -f /usr/local/share/man/man1/gentlsa.1
+            test -f /usr/local/share/man/man5/gentlsa.5

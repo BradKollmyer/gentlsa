@@ -1,5 +1,6 @@
 [Unit]
 Description=Retry interrupted GenTLSA DANE rollovers
+Documentation=man:gentlsa(1)
 Documentation=https://github.com/BradKollmyer/gentlsa
 
 [Timer]

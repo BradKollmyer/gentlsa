@@ -1,5 +1,6 @@
 [Unit]
 Description=Resume interrupted GenTLSA DANE rollovers
+Documentation=man:gentlsa(1)
 Documentation=https://github.com/BradKollmyer/gentlsa
 After=network-online.target nss-lookup.target
 Wants=network-online.target

@@ -48,6 +48,8 @@ assets = [
     { source = "contrib/systemd/gentlsa.conf", dest = "/usr/lib/tmpfiles.d/gentlsa.conf", mode = "644" },
     { source = "LICENSE", dest = "/usr/share/licenses/gentlsa/LICENSE", mode = "644", doc = true },
     { source = "README.md", dest = "/usr/share/doc/gentlsa/README.md", mode = "644", doc = true },
+    { source = "man/gentlsa.1", dest = "/usr/share/man/man1/gentlsa.1", mode = "644", doc = true },
+    { source = "man/gentlsa.5", dest = "/usr/share/man/man5/gentlsa.5", mode = "644", doc = true },
 ]
 
 [package.metadata.deb]
@@ -65,6 +67,8 @@ assets = [
     ["contrib/systemd/gentlsa.conf", "usr/lib/tmpfiles.d/", "644"],
     ["LICENSE", "usr/share/doc/gentlsa/LICENSE", "644"],
     ["README.md", "usr/share/doc/gentlsa/README.md", "644"],
+    ["man/gentlsa.1", "usr/share/man/man1/", "644"],
+    ["man/gentlsa.5", "usr/share/man/man5/", "644"],
 ]
 
 # The profile that 'dist' will build with

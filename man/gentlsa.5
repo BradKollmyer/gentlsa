@@ -1,0 +1,244 @@
+.Dd August 17, 2026
+.Dt GENTLSA 5
+.Os
+.Sh NAME
+.Nm gentlsa
+.Nd configuration files for GenTLSA publishers
+.Sh SYNOPSIS
+.Pa /etc/gentlsa/cloudflare.cfg
+.Pa /etc/gentlsa/nsupdate.cfg
+.Pa /etc/gentlsa/route53.cfg
+.Pa /etc/gentlsa/google.cfg
+.Sh DESCRIPTION
+.Xr gentlsa 1
+reads INI-style files for each DNS publisher.
+The first existing path wins.
+Environment variables override values from the file.
+.Pp
+System paths under
+.Pa /etc/gentlsa
+are preferred.
+Per-user fallbacks are listed with each file.
+.Ss Cloudflare
+.Pa /etc/gentlsa/cloudflare.cfg ,
+then
+.Pa ~/.cloudflare/cloudflare.cfg .
+Section name
+.Sy CloudFlare
+or
+.Sy Cloudflare .
+.Pp
+A scoped API token
+.Pq no email
+is preferred:
+.Bd -literal -offset indent
+[CloudFlare]
+token = <api token>
+.Ed
+.Pp
+.Sy api_token
+and
+.Sy apitoken
+are accepted as aliases for
+.Sy token .
+A global API key still works if both email and token are set:
+.Bd -literal -offset indent
+[CloudFlare]
+email = <cloudflare login>
+token = <global API key>
+.Ed
+.Pp
+The token needs Zone read and DNS edit on the zones you publish to.
+.Bl -tag -width CLOUDFLARE_API_TOKEN
+.It Ev CF_API_TOKEN , Ev CLOUDFLARE_API_TOKEN
+Bearer API token.
+.It Ev CF_API_EMAIL , Ev CLOUDFLARE_EMAIL
+Login for a global API key.
+.It Ev CF_API_KEY , Ev CLOUDFLARE_API_KEY
+Global API key.
+.El
+.Ss nsupdate
+RFC 2136 dynamic updates signed with TSIG.
+.Nm
+does not shell out to the BIND
+.Xr nsupdate 1
+binary.
+.Pp
+.Pa /etc/gentlsa/nsupdate.cfg ,
+then
+.Pa ~/.gentlsa/nsupdate.cfg .
+Section name
+.Sy Nsupdate ,
+.Sy nsupdate ,
+or
+.Sy NSUpdate .
+.Bd -literal -offset indent
+[Nsupdate]
+server = ns1.example.com
+port = 53
+key-name = gentlsa-update.
+secret = <base64 hmac>
+algorithm = hmac-sha256
+ttl = 3600
+.Ed
+.Pp
+.Sy hmac-sha256
+is the default and the recommended algorithm.
+.Sy hmac-sha384
+and
+.Sy hmac-sha512
+are also accepted.
+The secret is BIND-style base64; hex is accepted too.
+Default port is 53; default TTL is 3600.
+.Pp
+Key aliases:
+.Sy host , nameserver , ns
+for
+.Sy server ;
+.Sy key_name , keyname , name
+for
+.Sy key-name ;
+.Sy key , key-secret
+for
+.Sy secret ;
+.Sy alg , hmac
+for
+.Sy algorithm .
+.Pp
+.Cm list Fl -nsupdate
+without ports tries AXFR.
+If the key is not allowed to transfer the zone, pass the ports
+instead.
+The nameserver must allow UPDATE
+.Pq and AXFR, if you want port-less list
+for that TSIG key on the zone.
+.Bl -tag -width GENTLSA_NSUPDATE_ALGORITHM
+.It Ev GENTLSA_NSUPDATE_SERVER
+Nameserver host.
+.It Ev GENTLSA_NSUPDATE_PORT
+Nameserver port
+.Pq default 53 .
+.It Ev GENTLSA_NSUPDATE_KEY_NAME
+TSIG key name.
+.It Ev GENTLSA_NSUPDATE_SECRET
+TSIG secret.
+.It Ev GENTLSA_NSUPDATE_ALGORITHM
+.Sy hmac-sha256 ,
+.Sy hmac-sha384 ,
+or
+.Sy hmac-sha512 .
+.It Ev GENTLSA_NSUPDATE_TTL
+TTL for new records
+.Pq default 3600 .
+.El
+.Ss Route 53
+Amazon Route 53 REST API
+.Pq SigV4 .
+.Pa /etc/gentlsa/route53.cfg ,
+then
+.Pa ~/.gentlsa/route53.cfg .
+Section name
+.Sy Route53 ,
+.Sy route53 ,
+or
+.Sy AWS .
+.Bd -literal -offset indent
+[Route53]
+access_key = AKIA...
+secret_key = ...
+ttl = 3600
+.Ed
+.Pp
+.Sy session_token
+is accepted for temporary credentials.
+Default TTL is 3600.
+The IAM principal needs
+.Sy route53:ListHostedZones ,
+.Sy route53:ListResourceRecordSets ,
+and
+.Sy route53:ChangeResourceRecordSets
+on the hosted zones you publish to.
+.Bl -tag -width GENTLSA_AWS_SECRET_ACCESS_KEY
+.It Ev AWS_ACCESS_KEY_ID , Ev GENTLSA_AWS_ACCESS_KEY_ID
+Access key.
+.It Ev AWS_SECRET_ACCESS_KEY , Ev GENTLSA_AWS_SECRET_ACCESS_KEY
+Secret key.
+.It Ev AWS_SESSION_TOKEN , Ev GENTLSA_AWS_SESSION_TOKEN
+Session token
+.Pq optional .
+.El
+.Ss Google Cloud DNS
+.Pa /etc/gentlsa/google.cfg ,
+then
+.Pa ~/.gentlsa/google.cfg .
+Section name
+.Sy Google ,
+.Sy google ,
+or
+.Sy GCP .
+.Bd -literal -offset indent
+[Google]
+credentials = /etc/gentlsa/google-sa.json
+project = my-gcp-project
+ttl = 3600
+.Ed
+.Pp
+.Sy credentials_file
+and
+.Sy key_file
+are aliases for
+.Sy credentials .
+The project can also come from
+.Sy project_id
+in the service-account JSON.
+Default TTL is 3600.
+.Pp
+The service account needs
+.Sy dns.managedZones.list ,
+.Sy dns.resourceRecordSets.list ,
+and
+.Sy dns.changes.create
+.Pq DNS Administrator, or a custom role with those permissions .
+.Bl -tag -width GOOGLE_APPLICATION_CREDENTIALS
+.It Ev GOOGLE_APPLICATION_CREDENTIALS , Ev GENTLSA_GOOGLE_CREDENTIALS
+Path to service-account JSON.
+.It Ev GENTLSA_GOOGLE_PROJECT , Ev GOOGLE_CLOUD_PROJECT , Ev GCLOUD_PROJECT
+GCP project.
+.El
+.Ss Unsupported
+DigitalOcean DNS is not supported: the official API has no TLSA
+record type and no DNSSEC.
+.Sh FILES
+.Bl -tag -width /usr/lib/tmpfiles.d/gentlsa.conf
+.It Pa /etc/gentlsa/cloudflare.cfg
+Cloudflare credentials.
+.It Pa ~/.cloudflare/cloudflare.cfg
+Per-user Cloudflare fallback.
+.It Pa /etc/gentlsa/nsupdate.cfg
+RFC 2136 / TSIG settings.
+.It Pa ~/.gentlsa/nsupdate.cfg
+Per-user nsupdate fallback.
+.It Pa /etc/gentlsa/route53.cfg
+Route 53 credentials.
+.It Pa ~/.gentlsa/route53.cfg
+Per-user Route 53 fallback.
+.It Pa /etc/gentlsa/google.cfg
+Google Cloud DNS settings.
+.It Pa ~/.gentlsa/google.cfg
+Per-user Google fallback.
+.It Pa /var/lib/gentlsa/rollover
+System directory for persisted
+.Cm rollover
+jobs.
+Created on Linux by
+.Pa /usr/lib/tmpfiles.d/gentlsa.conf .
+Override with
+.Ev GENTLSA_STATE_DIR .
+.El
+.Sh SEE ALSO
+.Xr gentlsa 1 ,
+.Xr nsupdate 1
+.Sh AUTHORS
+.An Brad Kollmyer
+.Sh LICENSE
+BSD-2-Clause.

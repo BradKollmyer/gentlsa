@@ -22,3 +22,5 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Ship man pages in the release archives (next to the binary)
+include = ["man/gentlsa.1", "man/gentlsa.5"]

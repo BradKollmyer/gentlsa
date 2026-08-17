@@ -1,0 +1,504 @@
+.Dd August 17, 2026
+.Dt GENTLSA 1
+.Os
+.Sh NAME
+.Nm gentlsa
+.Nd generate, publish, verify, and roll over DANE/TLSA records
+.Sh SYNOPSIS
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm generate
+.Ar zone
+.Ar ports
+.Op Fl -hostname Ar name
+.Op Fl -info
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -replace
+.Op Fl -dryrun
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm list
+.Ar zone
+.Op Ar ports
+.Op Fl -hostname Ar name
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -info
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm prune
+.Ar zone
+.Ar ports
+.Op Fl -hostname Ar name
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -dryrun
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm rollover
+.Ar certfile
+.Ar zone
+.Ar ports
+.Op Fl -hostname Ar name
+.Op Fl -info
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -reload Ar cmd
+.Op Fl -ttl Ar seconds
+.Op Fl -schedule
+.Op Fl -dryrun
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm rollover
+.Fl -resume
+.Op Ar job
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm verify
+.Ar zone
+.Ar ports
+.Op Fl -hostname Ar name
+.Op Fl -info
+.Op Fl -warn Ar days
+.Op Fl -critical Ar days
+.Op Fl -no-expiry-check
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm file
+.Ar certfile
+.Op Fl -zone Ar zone
+.Op Fl -hostname Ar name
+.Op Fl -port Ar ports
+.Op Fl -info
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -replace
+.Op Fl -dryrun
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm cloudflare
+.Op Fl -info
+.Op Fl -listzones
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm nsupdate
+.Op Fl -info
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm route53
+.Op Fl -info
+.Op Fl -listzones
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm google
+.Op Fl -info
+.Op Fl -listzones
+.Sh DESCRIPTION
+.Nm
+prints, publishes, lists, prunes, and verifies DANE TLSA records.
+It always emits
+.Sy TLSA 3 1 1
+.Pq DANE-EE, SubjectPublicKeyInfo, SHA-256
+from a live TLS certificate or a local PEM/DER file.
+.Pp
+.Ar zone
+is the DNS zone
+.Pq for example Sy example.com .
+.Ar ports
+is one port or a comma-separated list
+.Pq Sy 443
+or
+.Sy 25,465 .
+.Fl -hostname
+is the short host without the zone:
+.Sy mx
+becomes
+.Sy mx.example.org .
+The owner name looks like
+.Dl _<port>._tcp[.<hostname>].<zone>
+.Pp
+Ports
+.Sy 25
+and
+.Sy 587
+use SMTP STARTTLS.
+Every other port, including 443 and 465, uses implicit TLS.
+Certificate verification is disabled on purpose so an expired or
+otherwise untrusted leaf can still be hashed.
+.Pp
+Publisher flags
+.Fl -cloudflare ,
+.Fl -nsupdate ,
+.Fl -route53 ,
+and
+.Fl -google
+are mutually exclusive.
+Credentials and file formats are documented in
+.Xr gentlsa 5 .
+.Sh OPTIONS
+These flags apply to every command:
+.Bl -tag -width Ds
+.It Fl v , Fl -verbose
+Print each processing step to standard error
+.Pq connect, STARTTLS, handshake, DNS lookup, publisher APIs .
+Regular output stays on standard output, so
+.Cm verify
+remains Nagios-safe.
+.It Fl -json
+Print one JSON object on standard output instead of text.
+.Fl -verbose
+can still be combined; steps stay on standard error.
+.El
+.Sh COMMANDS
+.Ss generate
+Fetch the live certificate and print a zone-file style TLSA record.
+With a publisher flag, publish that hash.
+If a TLSA record already exists, the new hash is added and the old
+one is kept
+.Pq DANE key rollover .
+Use
+.Fl -replace
+to overwrite instead.
+.Bl -tag -width Ds
+.It Fl -hostname Ar name
+Short hostname without the zone.
+.It Fl -info
+Print leaf-certificate details before the record.
+.It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google
+Publish via that provider.
+.It Fl -replace
+With a publisher, overwrite the existing TLSA instead of adding a
+rollover hash.
+.It Fl -dryrun
+With a publisher, print the action but do not write records.
+.El
+.Ss list
+Show TLSA records from DNS.
+Publisher flags also print what that provider has.
+.Fl -nsupdate
+queries the configured primary, or AXFR when
+.Ar ports
+is omitted.
+.Fl -info
+fetches the live certificate and marks each
+.Sy 3 1 1
+hash current or stale.
+Other usage/selector/matching values are listed with their RFC 7218
+names and are not compared to the live key.
+Omit
+.Ar ports
+to include every port.
+.Ss prune
+List, and with a publisher delete, TLSA records that no longer match
+the live certificate.
+Run this after a rollover has been live longer than the DNS TTL.
+.Fl -dryrun
+shows what would be removed without writing.
+.Ss rollover
+Publish a not-yet-live certificate hash, wait two TLSA TTLs
+.Pq RFC 7671 ,
+run
+.Fl -reload ,
+wait two TTLs again, then prune hashes that no longer match the live
+certificate.
+A publisher flag is required.
+.Fl -replace
+is not available.
+.Bl -tag -width Ds
+.It Fl -hostname Ar name
+Short hostname without the zone.
+.It Fl -info
+Print certificate details.
+.It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google
+Publish, wait, and prune via that provider.
+.It Fl -reload Ar cmd
+Command to run after the first wait so the service presents the new
+certificate.
+Without this flag, only the new hash is published and the remaining
+steps are printed.
+Do not prune before the service presents the new cert.
+.It Fl -ttl Ar seconds
+TLSA record TTL.
+Each wait is twice this value.
+Defaults are 300 seconds for Cloudflare
+.Pq auto TTL
+and 3600 seconds otherwise.
+.Ar 0
+skips both waits
+.Pq unsafe on a live resolver .
+.It Fl -schedule
+Write the job and start
+.Sy gentlsa-rollover@JOB
+so the hook does not block.
+Requires
+.Fl -reload .
+.It Fl -dryrun
+Print the sequence without writing records, sleeping, or running
+.Fl -reload .
+.It Fl -resume Op Ar job
+Resume a pending rollover after a reboot.
+With no argument, resume every job.
+.Ar job
+may be a job id or a zone
+.Pq Sy example.com
+or
+.Sy example.com_443 .
+.El
+.Pp
+With
+.Fl -reload ,
+a job is written under
+.Pa /var/lib/gentlsa/rollover
+if that directory can be created, otherwise
+.Ev GENTLSA_STATE_DIR
+or the user data directory
+.Pq Pa ~/.local/share/gentlsa/rollover
+on Linux,
+.Pa ~/Library/Application\ Support/gentlsa/rollover
+on macOS.
+.Cm rollover Fl -resume
+continues from the saved deadlines.
+After a reboot the new cert is usually already live; resume notices
+that, skips
+.Fl -reload ,
+and only waits until it is safe to prune.
+.Pp
+Linux RPM and deb packages ship
+.Pa gentlsa-resume.service ,
+.Pa gentlsa-resume.timer ,
+and
+.Pa gentlsa-rollover@.service .
+Enable the timer after install:
+.Bd -literal -offset indent
+systemctl enable --now gentlsa-resume.timer
+.Ed
+.Pp
+.Fx ,
+Homebrew, and the curl installer do not ship units.
+On
+.Fx ,
+call
+.Nm Cm rollover Fl -resume
+from cron or
+.Sy @reboot .
+.Ss verify
+Compare every TLSA record in DNS at the owner name with the live
+certificate.
+Nagios-compatible.
+After a hash match, remaining days until
+.Sy notAfter
+are checked against
+.Fl -warn
+.Pq default 14
+and
+.Fl -critical
+.Pq default 7 .
+.Fl -critical
+cannot be greater than
+.Fl -warn
+.Pq rejected with exit 3, UNKNOWN .
+.Fl -no-expiry-check
+skips the expiry check and restores the hash-only verdict.
+A hash mismatch stays ERROR even if the cert is also expiring.
+.Bl -tag -width Ds
+.It Fl -hostname Ar name
+Short hostname without the zone.
+.It Fl -info
+Print the live certificate before the status line.
+.It Fl -warn Ar days
+WARNING when the live certificate expires in this many days or fewer.
+.It Fl -critical Ar days
+CRITICAL when the live certificate expires in this many days or fewer.
+.It Fl -no-expiry-check
+Check the TLSA hash only, ignoring certificate expiry.
+Conflicts with
+.Fl -warn
+and
+.Fl -critical .
+.El
+.Pp
+With a port list, the overall exit is the worst result by Nagios
+severity: CRITICAL, then WARNING, then UNKNOWN, then OK.
+.Ss file
+Print the same TLSA data from a local PEM or DER certificate.
+Certificate details are shown by default.
+Pass
+.Fl -port
+and
+.Fl -hostname
+to include the owner name.
+With a publisher flag, and with
+.Fl -zone
+and
+.Fl -port ,
+publish that file's hash before reloading the service.
+.Ss cloudflare , nsupdate , route53 , google
+Publisher helpers.
+.Fl -info
+prints authentication status
+.Pq never secrets .
+.Fl -listzones
+lists zones available to the configured account
+.Pq implied for Cm cloudflare
+when
+.Fl -info
+is omitted.
+.Sh ENVIRONMENT
+.Bl -tag -width GENTLSA_NSUPDATE_ALGORITHM
+.It Ev GENTLSA_STATE_DIR
+Directory for persisted rollover jobs.
+Overrides
+.Pa /var/lib/gentlsa/rollover
+and the user data directory.
+.It Ev CF_API_TOKEN , Ev CLOUDFLARE_API_TOKEN
+Cloudflare API token.
+See
+.Xr gentlsa 5 .
+.It Ev CF_API_EMAIL , Ev CF_API_KEY
+Cloudflare global API key
+.Pq also Ev CLOUDFLARE_EMAIL
+and
+.Ev CLOUDFLARE_API_KEY .
+.It Ev GENTLSA_NSUPDATE_SERVER , Ev GENTLSA_NSUPDATE_PORT , Ev GENTLSA_NSUPDATE_KEY_NAME , Ev GENTLSA_NSUPDATE_SECRET , Ev GENTLSA_NSUPDATE_ALGORITHM , Ev GENTLSA_NSUPDATE_TTL
+RFC 2136 / TSIG settings.
+.It Ev AWS_ACCESS_KEY_ID , Ev AWS_SECRET_ACCESS_KEY , Ev AWS_SESSION_TOKEN
+Route 53 credentials
+.Pq also Ev GENTLSA_AWS_*
+equivalents.
+.It Ev GOOGLE_APPLICATION_CREDENTIALS , Ev GENTLSA_GOOGLE_CREDENTIALS
+Path to a Google service-account JSON key.
+.It Ev GENTLSA_GOOGLE_PROJECT , Ev GOOGLE_CLOUD_PROJECT , Ev GCLOUD_PROJECT
+Google Cloud project.
+.El
+.Sh FILES
+.Bl -tag -width /usr/lib/systemd/system/gentlsa-rollover@.service
+.It Pa /etc/gentlsa/cloudflare.cfg
+Cloudflare credentials.
+Falls back to
+.Pa ~/.cloudflare/cloudflare.cfg .
+.It Pa /etc/gentlsa/nsupdate.cfg
+RFC 2136 / TSIG settings.
+Falls back to
+.Pa ~/.gentlsa/nsupdate.cfg .
+.It Pa /etc/gentlsa/route53.cfg
+Route 53 credentials.
+Falls back to
+.Pa ~/.gentlsa/route53.cfg .
+.It Pa /etc/gentlsa/google.cfg
+Google Cloud DNS settings.
+Falls back to
+.Pa ~/.gentlsa/google.cfg .
+.It Pa /var/lib/gentlsa/rollover
+System rollover job directory
+.Pq created by the Linux packages via tmpfiles.d .
+.It Pa /usr/lib/systemd/system/gentlsa-resume.timer
+Retry interrupted rollovers one minute after boot, then every 10
+minutes.
+.El
+.Pp
+See
+.Xr gentlsa 5
+for file formats.
+.Sh EXIT STATUS
+.Cm verify
+uses Nagios-compatible codes.
+Other commands exit 0 on success and non-zero on error.
+.Bl -tag -width 3n
+.It 0
+OK.
+At least one DNS TLSA hash matches, and the cert expires after
+.Fl -warn
+days.
+.It 1
+WARNING.
+Hash matches, days left less than or equal to
+.Fl -warn .
+.It 2
+CRITICAL.
+Hash matches but the cert is expired, not yet valid, or expires
+within
+.Fl -critical
+days; or ERROR, DNS has TLSA records and none match.
+.It 3
+UNKNOWN.
+Lookup or connection failed, or
+.Fl -critical
+is greater than
+.Fl -warn .
+.El
+.Pp
+.Fl -json
+keeps the same exit codes and puts the result in
+.Sy status
+.Pq Sy ok , warning , critical , error , unknown ,
+.Sy message ,
+and
+.Sy exit .
+.Sh EXAMPLES
+Print a live TLSA record:
+.Bd -literal -offset indent
+$ gentlsa generate example.com 443
+_443._tcp TLSA 3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
+.Ed
+.Pp
+SMTP STARTTLS for
+.Sy smtp.gmail.com:587 :
+.Bd -literal -offset indent
+$ gentlsa generate gmail.com 587 --hostname smtp --info
+.Ed
+.Pp
+Nagios-style verify:
+.Bd -literal -offset indent
+$ gentlsa verify www.freebsd.org 443
+OK - TLSA is valid
+.Ed
+.Pp
+Automated DANE rollover after issuing a new certificate
+.Pq do not reload the service first :
+.Bd -literal -offset indent
+$ gentlsa rollover /etc/letsencrypt/live/example.com/cert.pem \\
+    example.com 443 --cloudflare \\
+    --reload "systemctl reload nginx" --schedule
+.Ed
+.Pp
+Certbot deploy hook
+.Pq Pa /etc/letsencrypt/renewal-hooks/deploy/gentlsa :
+.Bd -literal -offset indent
+#!/bin/sh
+set -eu
+zone=$(basename "$RENEWED_LINEAGE")
+gentlsa rollover "$RENEWED_LINEAGE/cert.pem" "$zone" 443 \\
+  --cloudflare --reload "systemctl reload nginx" --schedule
+.Ed
+.Pp
+Use
+.Ic certonly
+so certbot does not reload in the same run as issuance.
+.Sh SEE ALSO
+.Xr dig 1 ,
+.Xr nsupdate 1 ,
+.Xr openssl 1 ,
+.Xr gentlsa 5
+.Pp
+RFC 6698
+.Pq DANE ,
+RFC 7218
+.Pq TLSA mnemonics ,
+RFC 7671
+.Pq DANE operational guidance ,
+RFC 2136
+.Pq dynamic updates .
+.Sh AUTHORS
+.An Emiel Kollof
+wrote the original Python tool.
+.An Brad Kollmyer
+wrote this Rust port.
+.Sh LICENSE
+BSD-2-Clause.

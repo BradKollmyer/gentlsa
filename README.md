@@ -22,7 +22,7 @@ Homebrew:
 brew install BradKollmyer/tap/gentlsa
 ```
 
-Fedora / RHEL (installs `/usr/bin/gentlsa` and the systemd units):
+Fedora / RHEL (installs `/usr/bin/gentlsa`, man pages, and the systemd units):
 
 ```
 # x86_64
@@ -38,7 +38,7 @@ Or download the versioned file (`gentlsa-0.4.3-1.x86_64.rpm`) from the [release 
 sudo systemctl enable --now gentlsa-resume.timer
 ```
 
-Ubuntu / Debian (installs `/usr/bin/gentlsa` and the same systemd units):
+Ubuntu / Debian (installs `/usr/bin/gentlsa`, man pages, and the same systemd units):
 
 ```
 # amd64
@@ -52,7 +52,7 @@ sudo apt install ./gentlsa.arm64.deb
 
 Then `sudo systemctl enable --now gentlsa-resume.timer` if you use `rollover`.
 
-FreeBSD (installs `/usr/local/bin/gentlsa` only — no systemd units):
+FreeBSD (installs `/usr/local/bin/gentlsa` and man pages — no systemd units):
 
 ```
 # amd64 (FreeBSD 14+)
@@ -60,6 +60,8 @@ sudo pkg add https://github.com/BradKollmyer/gentlsa/releases/latest/download/ge
 ```
 
 Or download the versioned file (`gentlsa-0.4.3.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package. Resume an interrupted rollover with `gentlsa rollover --resume` from cron or `@reboot`.
+
+The RPM, deb, and FreeBSD packages install `gentlsa(1)` and `gentlsa(5)` (`man gentlsa`).
 
 Windows (PowerShell):
 
@@ -479,6 +481,8 @@ DigitalOcean DNS is not supported: the official API has no TLSA record type and 
 ```
 cargo test
 cargo clippy --all-targets -- -D warnings
+mandoc -a man/gentlsa.1
+mandoc -a man/gentlsa.5
 ```
 
 CI runs `cargo test --release` and a binary smoke test (`scripts/smoke-test.sh`) on Linux (x86_64 and arm64), macOS (Apple Silicon and Intel), Windows (x86_64 and arm64), and FreeBSD 14 amd64. The FreeBSD job also `pkg add`s the built `.pkg` and re-runs the smoke test on `/usr/local/bin/gentlsa`.
@@ -489,7 +493,7 @@ To build local RPM and deb packages (`cargo-generate-rpm` and `cargo-deb` requir
 ./scripts/build-rpms.sh
 ```
 
-To build a local FreeBSD `.pkg` (amd64). On macOS this cross-compiles inside an [Apple container](https://github.com/apple/container) (not Docker). The FreeBSD package is the binary, license, and README only:
+To build a local FreeBSD `.pkg` (amd64). On macOS this cross-compiles inside an [Apple container](https://github.com/apple/container) (not Docker). The FreeBSD package is the binary, man pages, license, and README:
 
 ```
 ./scripts/build-pkg.sh
