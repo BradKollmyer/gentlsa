@@ -65,6 +65,7 @@
 .Op Fl -warn Ar days
 .Op Fl -critical Ar days
 .Op Fl -no-expiry-check
+.Op Fl -no-dnssec-check
 .Nm
 .Op Fl v
 .Op Fl -json
@@ -166,6 +167,8 @@ one is kept
 Use
 .Fl -replace
 to overwrite instead.
+Publishing to a zone with no DS record prints a warning on stderr:
+DANE clients ignore TLSA records in an unsigned zone.
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
 Short hostname without the zone.
@@ -307,6 +310,14 @@ cannot be greater than
 .Fl -no-expiry-check
 skips the expiry check and restores the hash-only verdict.
 A hash mismatch stays ERROR even if the cert is also expiring.
+.Pp
+The TLSA records are also validated with DNSSEC, locally from the root
+trust anchor, through the system resolver.
+A DANE client only honors TLSA records that validate as secure, so an
+unauthenticated RRset is WARNING and a bogus one is CRITICAL.
+A resolver that strips DNSSEC records makes every zone look
+unauthenticated; point the system resolver at a full resolver or pass
+.Fl -no-dnssec-check .
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
 Short hostname without the zone.
@@ -322,6 +333,8 @@ Conflicts with
 .Fl -warn
 and
 .Fl -critical .
+.It Fl -no-dnssec-check
+Skip DNSSEC validation of the TLSA records.
 .El
 .Pp
 With a port list, the overall exit is the worst result by Nagios
@@ -419,13 +432,16 @@ days.
 .It 1
 WARNING.
 Hash matches, days left less than or equal to
-.Fl -warn .
+.Fl -warn ,
+or the TLSA records are not DNSSEC-authenticated.
 .It 2
 CRITICAL.
 Hash matches but the cert is expired, not yet valid, or expires
 within
 .Fl -critical
-days; or ERROR, DNS has TLSA records and none match.
+days, or the TLSA records failed DNSSEC validation
+.Pq bogus ;
+or ERROR, DNS has TLSA records and none match.
 .It 3
 UNKNOWN.
 Lookup or connection failed, or

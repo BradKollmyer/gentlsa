@@ -202,6 +202,9 @@ pub enum Command {
         /// Check the TLSA hash only, ignoring certificate expiry (pre-0.4.1 behavior)
         #[arg(long, conflicts_with_all = ["warn", "critical"])]
         no_expiry_check: bool,
+        /// Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)
+        #[arg(long)]
+        no_dnssec_check: bool,
     },
     /// Cloudflare helpers
     Cloudflare {

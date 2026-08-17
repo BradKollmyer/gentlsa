@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::cert::CertDetails;
 use crate::cloudflare::ListedTlsa;
-use crate::dns::TlsaRecord;
+use crate::dns::{DnssecStatus, TlsaRecord};
 use crate::nsupdate::ListedTlsa as NsupdateListed;
 use crate::publish::{ListedTlsa as ApiListed, PruneReport, PublishReport};
 use crate::tlsa;
@@ -237,6 +237,8 @@ pub struct VerifyResult {
     pub info: Option<CertDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_in_days: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dnssec: Option<DnssecStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -487,6 +489,36 @@ pub fn apply_expiry(
     outcome
 }
 
+/// After a matching TLSA hash, fold in the DNSSEC verdict: bogus is CRITICAL
+/// (validating resolvers SERVFAIL, so DANE clients cannot connect at all) and
+/// an unauthenticated RRset is WARNING (DANE is inert without DNSSEC).
+/// A worse verdict already present (hash mismatch, expiry CRITICAL, UNKNOWN)
+/// keeps its message; DNSSEC never improves an outcome.
+pub fn apply_dnssec(outcome: VerifyOutcome, dnssec: Option<DnssecStatus>) -> VerifyOutcome {
+    let Some(dnssec) = dnssec else {
+        return outcome;
+    };
+    match dnssec {
+        DnssecStatus::Secure => outcome,
+        DnssecStatus::Bogus if outcome.exit != 2 && outcome.exit != 3 => VerifyOutcome {
+            status: "critical",
+            message: "CRITICAL - TLSA records failed DNSSEC validation (bogus)".into(),
+            exit: 2,
+        },
+        DnssecStatus::Insecure | DnssecStatus::Indeterminate if outcome.exit == 0 => {
+            VerifyOutcome {
+                status: "warning",
+                message: format!(
+                    "WARNING - TLSA records are not DNSSEC-authenticated ({})",
+                    dnssec.label()
+                ),
+                exit: 1,
+            }
+        }
+        _ => outcome,
+    }
+}
+
 /// Validity-state phrase shared by the Nagios message and the verbose log so
 /// the two cannot diverge.
 pub fn expiry_phrase(days_left: i64, not_yet_valid: bool) -> String {
@@ -695,6 +727,60 @@ mod tests {
     }
 
     #[test]
+    fn apply_dnssec_verdicts() {
+        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")]);
+
+        let secure = apply_dnssec(ok.clone(), Some(DnssecStatus::Secure));
+        assert_eq!((secure.status, secure.exit), ("ok", 0));
+
+        let skipped = apply_dnssec(ok.clone(), None);
+        assert_eq!(skipped.exit, 0);
+
+        let insecure = apply_dnssec(ok.clone(), Some(DnssecStatus::Insecure));
+        assert_eq!((insecure.status, insecure.exit), ("warning", 1));
+        assert_eq!(
+            insecure.message,
+            "WARNING - TLSA records are not DNSSEC-authenticated (insecure)"
+        );
+
+        let indeterminate = apply_dnssec(ok.clone(), Some(DnssecStatus::Indeterminate));
+        assert_eq!((indeterminate.status, indeterminate.exit), ("warning", 1));
+
+        let bogus = apply_dnssec(ok, Some(DnssecStatus::Bogus));
+        assert_eq!((bogus.status, bogus.exit), ("critical", 2));
+        assert_eq!(
+            bogus.message,
+            "CRITICAL - TLSA records failed DNSSEC validation (bogus)"
+        );
+    }
+
+    #[test]
+    fn apply_dnssec_does_not_hide_worse_verdicts() {
+        // A hash mismatch keeps its ERROR message even when the RRset is bogus.
+        let err = verify_outcome(Some("aabbcc"), &[tlsa("dddddd")]);
+        let still = apply_dnssec(err, Some(DnssecStatus::Bogus));
+        assert_eq!((still.status, still.exit), ("error", 2));
+        assert!(still.message.contains("ERROR - TLSA invalid"));
+
+        // UNKNOWN stays UNKNOWN: without records there is nothing to judge.
+        let unknown = verify_outcome(None, &[]);
+        let still_unknown = apply_dnssec(unknown, Some(DnssecStatus::Bogus));
+        assert_eq!(still_unknown.exit, 3);
+
+        // An expiry WARNING keeps its message, but bogus still escalates it.
+        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")]);
+        let warn = apply_expiry(ok, 10, false, 14, 7);
+        let insecure_warn = apply_dnssec(warn.clone(), Some(DnssecStatus::Insecure));
+        assert_eq!(insecure_warn.exit, 1);
+        assert_eq!(
+            insecure_warn.message,
+            "WARNING - certificate expires in 10 days"
+        );
+        let bogus_warn = apply_dnssec(warn, Some(DnssecStatus::Bogus));
+        assert_eq!((bogus_warn.status, bogus_warn.exit), ("critical", 2));
+    }
+
+    #[test]
     fn worst_verify_exit_severity_order() {
         assert_eq!(worst_verify_exit([0, 0]), 0);
         assert_eq!(worst_verify_exit([0, 1]), 1);
@@ -752,6 +838,7 @@ mod tests {
             dns: vec![JsonTlsa::from_dns(&current[0], Some(live))],
             info: None,
             expires_in_days: Some(90),
+            dnssec: Some(DnssecStatus::Secure),
         };
 
         let stale = [tlsa("cccc")];
@@ -766,6 +853,7 @@ mod tests {
             dns: vec![JsonTlsa::from_dns(&stale[0], Some(live))],
             info: None,
             expires_in_days: Some(2),
+            dnssec: None,
         };
 
         let report = Report::Verify {
@@ -782,6 +870,8 @@ mod tests {
         assert_eq!(value["results"][0]["exit"], 0);
         assert_eq!(value["results"][0]["message"], "OK - TLSA is valid");
         assert_eq!(value["results"][0]["expires_in_days"], 90);
+        assert_eq!(value["results"][0]["dnssec"], "secure");
+        assert!(value["results"][1].get("dnssec").is_none());
         assert_eq!(value["results"][0]["dns"][0]["status"], "current");
         assert_eq!(value["results"][0]["dns"][0]["usage_name"], "DANE-EE");
         assert_eq!(value["results"][0]["dns"][0]["selector_name"], "SPKI");

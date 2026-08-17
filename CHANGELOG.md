@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `verify` validates the TLSA records with DNSSEC (locally, from the root trust anchor): an unauthenticated RRset is WARNING — DANE clients ignore TLSA records they cannot authenticate — and a bogus RRset is CRITICAL; `--no-dnssec-check` restores the pre-0.5.0 behavior, and `--json` reports the verdict in `dnssec`
+- Publishing to a zone with no DS record warns on stderr that DANE clients will ignore its TLSA records
 - Ship `gentlsa(1)` and `gentlsa(5)` man pages in the RPM, deb, and FreeBSD packages
 
 ## 0.4.3 - 2026-08-17

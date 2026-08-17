@@ -27,7 +27,7 @@ use crate::publish::{PublishMode, PublishReport, PublisherKind};
 use crate::report::{
     CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, NsupdateList,
     ProviderList, PruneResult, ReloadReport, Report, ResumeJob, RolloverPublish, VerifyResult,
-    ZoneRef, apply_expiry, expiry_phrase, verify_outcome, worst_verify_exit,
+    ZoneRef, apply_dnssec, apply_expiry, expiry_phrase, verify_outcome, worst_verify_exit,
 };
 use crate::route53::Client as Route53;
 use crate::tlsa::{connect_host, fqdn};
@@ -169,6 +169,7 @@ async fn run() -> Result<u8> {
             warn,
             critical,
             no_expiry_check,
+            no_dnssec_check,
         } => {
             if critical > warn {
                 output::text(format!(
@@ -189,7 +190,18 @@ async fn run() -> Result<u8> {
             let multi = ports.len() > 1;
             let mut results = Vec::new();
             for port in ports {
-                results.push(verify(&zone, *port, hostname.as_deref(), info, multi, expiry).await);
+                results.push(
+                    verify(
+                        &zone,
+                        *port,
+                        hostname.as_deref(),
+                        info,
+                        multi,
+                        expiry,
+                        !no_dnssec_check,
+                    )
+                    .await,
+                );
             }
             let worst = worst_verify_exit(results.iter().map(|result| result.exit));
             if output::is_json() {
@@ -1349,6 +1361,7 @@ async fn verify(
     info: bool,
     prefix: bool,
     expiry: Option<(u32, u32)>,
+    dnssec_check: bool,
 ) -> VerifyResult {
     let say = |msg: &str| {
         if output::is_json() {
@@ -1361,31 +1374,45 @@ async fn verify(
         }
     };
 
-    let fail =
-        |name: String, live: Option<String>, dns: Vec<JsonTlsa>, info: Option<CertDetails>| {
-            let outcome = verify_outcome(live.as_deref(), &[]);
-            say(&outcome.message);
-            VerifyResult {
-                port,
-                name,
-                status: outcome.status,
-                message: outcome.message,
-                exit: outcome.exit,
-                live,
-                dns,
-                info,
-                expires_in_days: None,
-            }
-        };
+    let fail = |name: String,
+                live: Option<String>,
+                dns: Vec<JsonTlsa>,
+                info: Option<CertDetails>,
+                dnssec: Option<dns::DnssecStatus>| {
+        let outcome = verify_outcome(live.as_deref(), &[]);
+        say(&outcome.message);
+        VerifyResult {
+            port,
+            name,
+            status: outcome.status,
+            message: outcome.message,
+            exit: outcome.exit,
+            live,
+            dns,
+            info,
+            expires_in_days: None,
+            dnssec,
+        }
+    };
 
     let host = connect_host(zone, hostname);
     verbose::step(format_args!("verify {host}:{port}"));
     let name = fqdn(zone, port, hostname);
-    let dns_record = match dns::lookup_tlsa(&name).await {
-        Ok(record) => record,
-        Err(err) => {
-            eprintln!("{err:#}");
-            return fail(name, None, Vec::new(), None);
+    let (dns_record, dnssec) = if dnssec_check {
+        match dns::lookup_tlsa_dnssec(&name).await {
+            Ok(lookup) => (lookup.records, lookup.dnssec),
+            Err(err) => {
+                eprintln!("{err:#}");
+                return fail(name, None, Vec::new(), None, None);
+            }
+        }
+    } else {
+        match dns::lookup_tlsa(&name).await {
+            Ok(record) => (record, None),
+            Err(err) => {
+                eprintln!("{err:#}");
+                return fail(name, None, Vec::new(), None, None);
+            }
         }
     };
 
@@ -1401,6 +1428,7 @@ async fn verify(
                     .map(|record| JsonTlsa::from_dns(record, None))
                     .collect(),
                 None,
+                dnssec,
             );
         }
     };
@@ -1419,6 +1447,7 @@ async fn verify(
                             .map(|record| JsonTlsa::from_dns(record, None))
                             .collect(),
                         None,
+                        dnssec,
                     );
                 }
             }
@@ -1432,6 +1461,7 @@ async fn verify(
                     .map(|record| JsonTlsa::from_dns(record, None))
                     .collect(),
                 None,
+                dnssec,
             );
         } else {
             cert.details().ok()
@@ -1452,6 +1482,7 @@ async fn verify(
                     .map(|record| JsonTlsa::from_dns(record, None))
                     .collect(),
                 info_block,
+                dnssec,
             );
         }
     };
@@ -1484,6 +1515,7 @@ async fn verify(
             critical,
         );
     }
+    outcome = apply_dnssec(outcome, dnssec);
     say(&outcome.message);
     VerifyResult {
         port,
@@ -1495,6 +1527,7 @@ async fn verify(
         dns,
         info: info_block,
         expires_in_days: Some(lifetime.days_left),
+        dnssec,
     }
 }
 
@@ -1519,6 +1552,7 @@ async fn publish_cert(
         publisher.replace,
         publisher.dryrun
     ));
+    dns::warn_if_unsigned(zone_name).await;
     match kind {
         PublisherKind::Cloudflare => {
             let cf = Cloudflare::from_env_or_config()
