@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
+use crate::output;
 use crate::tlsa;
 use crate::verbose;
 
@@ -63,7 +64,7 @@ struct DnsRecord {
     data: Option<TlsaData>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ListedTlsa {
     pub id: String,
     pub name: String,
@@ -73,21 +74,61 @@ pub struct ListedTlsa {
     pub certificate: String,
 }
 
-impl ListedTlsa {
-    pub fn to_text(&self) -> String {
-        format!(
-            "{} {} {} {}",
-            self.usage, self.selector, self.matching, self.certificate
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PublishMode {
     /// Add the live hash if it is missing; keep any existing hashes.
     Rollover,
     /// Overwrite the first matching 3 1 1 record (legacy behavior).
     Replace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishAction {
+    AlreadyPublished,
+    Added,
+    Replaced,
+    WouldAdd,
+    WouldReplace,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishReport {
+    pub zone: String,
+    pub owner: String,
+    pub action: PublishAction,
+    pub mode: PublishMode,
+    pub dryrun: bool,
+    pub existing: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info: Option<ZoneInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PruneReport {
+    pub zone: String,
+    pub dryrun: bool,
+    pub stale: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZoneInfo {
+    pub name: String,
+    pub id: String,
+    pub owner: String,
+    pub name_servers: Vec<String>,
+}
+
+impl ZoneInfo {
+    pub fn from_zone(zone: &Zone) -> Self {
+        Self {
+            name: zone.name.clone(),
+            id: zone.id.clone(),
+            owner: zone.owner_label(),
+            name_servers: zone.name_servers.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -191,7 +232,7 @@ impl Client {
         certificate: &str,
         mode: PublishMode,
         dryrun: bool,
-    ) -> Result<()> {
+    ) -> Result<PublishReport> {
         let owner = tlsa::owner_name(port, hostname);
         let mode_label = match mode {
             PublishMode::Replace => "replace",
@@ -211,16 +252,26 @@ impl Client {
             ours.len()
         ));
 
+        let report = |action: PublishAction| PublishReport {
+            zone: zone.name.clone(),
+            owner: owner.clone(),
+            action,
+            mode,
+            dryrun,
+            existing: ours.len(),
+            info: None,
+        };
+
         if ours
             .iter()
             .any(|record| record.hash_matches(certificate) && record.is_dane_ee_spki_sha256())
         {
             verbose::step("live hash already published, skipping");
-            println!(
+            output::text(format!(
                 "Cloudflare: TLSA already published for {} ({owner})",
                 zone.name
-            );
-            return Ok(());
+            ));
+            return Ok(report(PublishAction::AlreadyPublished));
         }
 
         let payload = tlsa_payload(&owner, certificate);
@@ -233,11 +284,11 @@ impl Client {
                     .copied()
                 {
                     if dryrun {
-                        println!(
+                        output::text(format!(
                             "Cloudflare: dry run, would replace TLSA {} on {}",
                             existing.id, zone.name
-                        );
-                        return Ok(());
+                        ));
+                        return Ok(report(PublishAction::WouldReplace));
                     }
                     let _: DnsRecord = self
                         .put_result(
@@ -251,26 +302,26 @@ impl Client {
                                 zone.name
                             )
                         })?;
-                    println!("Cloudflare: TLSA record updated for {}", zone.name);
-                    return Ok(());
+                    output::text(format!("Cloudflare: TLSA record updated for {}", zone.name));
+                    return Ok(report(PublishAction::Replaced));
                 }
             }
             PublishMode::Rollover => {
                 if !ours.is_empty() {
-                    println!(
+                    output::text(format!(
                         "Cloudflare: keeping {} existing TLSA record(s) for rollover",
                         ours.len()
-                    );
+                    ));
                 }
             }
         }
 
         if dryrun {
-            println!(
+            output::text(format!(
                 "Cloudflare: dry run, would add {owner} TLSA for {}",
                 zone.name
-            );
-            return Ok(());
+            ));
+            return Ok(report(PublishAction::WouldAdd));
         }
 
         let _: DnsRecord = self
@@ -282,8 +333,8 @@ impl Client {
                     zone.name
                 )
             })?;
-        println!("Cloudflare: TLSA record added for {}", zone.name);
-        Ok(())
+        output::text(format!("Cloudflare: TLSA record added for {}", zone.name));
+        Ok(report(PublishAction::Added))
     }
 
     pub async fn prune_tlsa(
@@ -293,7 +344,7 @@ impl Client {
         port: u16,
         live_hash: &str,
         dryrun: bool,
-    ) -> Result<usize> {
+    ) -> Result<PruneReport> {
         verbose::step(format_args!(
             "prune stale TLSA for {} port {port} dryrun={dryrun}",
             tlsa::owner_name(port, hostname)
@@ -310,19 +361,34 @@ impl Client {
             .collect();
         verbose::step(format_args!("{} stale TLSA record(s)", stale.len()));
 
+        let hashes: Vec<String> = stale
+            .iter()
+            .map(|record| {
+                record
+                    .data
+                    .as_ref()
+                    .map(|data| data.certificate.clone())
+                    .unwrap_or_else(|| "?".into())
+            })
+            .collect();
+
         if stale.is_empty() {
-            println!("Cloudflare: no stale TLSA records for {}", zone.name);
-            return Ok(0);
+            output::text(format!(
+                "Cloudflare: no stale TLSA records for {}",
+                zone.name
+            ));
+            return Ok(PruneReport {
+                zone: zone.name.clone(),
+                dryrun,
+                stale: hashes,
+            });
         }
 
-        for record in &stale {
-            let hash = record
-                .data
-                .as_ref()
-                .map(|data| data.certificate.as_str())
-                .unwrap_or("?");
+        for (record, hash) in stale.iter().zip(&hashes) {
             if dryrun {
-                println!("Cloudflare: dry run, would delete stale TLSA {hash}");
+                output::text(format!(
+                    "Cloudflare: dry run, would delete stale TLSA {hash}"
+                ));
                 continue;
             }
             self.delete(&format!("/zones/{}/dns_records/{}", zone.id, record.id))
@@ -333,9 +399,13 @@ impl Client {
                         zone.name
                     )
                 })?;
-            println!("Cloudflare: deleted stale TLSA {hash}");
+            output::text(format!("Cloudflare: deleted stale TLSA {hash}"));
         }
-        Ok(stale.len())
+        Ok(PruneReport {
+            zone: zone.name.clone(),
+            dryrun,
+            stale: hashes,
+        })
     }
 
     async fn tlsa_records(&self, zone: &Zone) -> Result<Vec<DnsRecord>> {
@@ -346,11 +416,11 @@ impl Client {
     }
 
     pub fn print_zone_info(&self, zone: &Zone) {
-        println!(">>> Cloudflare Information:");
-        println!("Zone name: {}", zone.name);
-        println!("Zone ID: {}", zone.id);
-        println!("Zone owner: {}", zone.owner_label());
-        println!("Name servers: {:?}", zone.name_servers);
+        output::text(">>> Cloudflare Information:");
+        output::text(format!("Zone name: {}", zone.name));
+        output::text(format!("Zone ID: {}", zone.id));
+        output::text(format!("Zone owner: {}", zone.owner_label()));
+        output::text(format!("Name servers: {:?}", zone.name_servers));
     }
 
     async fn get_result<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {

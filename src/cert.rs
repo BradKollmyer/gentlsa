@@ -19,7 +19,20 @@ use x509_parser::time::ASN1Time;
 use crate::tlsa::{self, owner_name};
 use crate::verbose;
 
+use serde::Serialize;
+
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CertDetails {
+    pub serial: String,
+    pub issuer: String,
+    pub subject: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub san: Option<String>,
+    pub not_before: String,
+    pub not_after: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct Certificate {
@@ -61,6 +74,18 @@ impl Certificate {
         Ok(hex::encode(Sha256::digest(cert.public_key().raw)))
     }
 
+    pub fn details(&self) -> Result<CertDetails> {
+        let cert = self.parsed()?;
+        Ok(CertDetails {
+            serial: serial_hex(&cert),
+            issuer: cert.issuer().to_string(),
+            subject: cert.subject().to_string(),
+            san: format_san(&cert),
+            not_before: format_asn1_time(&cert.validity().not_before),
+            not_after: format_asn1_time(&cert.validity().not_after),
+        })
+    }
+
     /// TLSA selector 0: SHA-256 of the full certificate.
     #[cfg(test)]
     pub fn cert_sha256_hex(&self) -> Result<String> {
@@ -68,23 +93,17 @@ impl Certificate {
     }
 
     pub fn print_info(&self, hostname: Option<&str>, ports: &[u16], show_info: bool) -> Result<()> {
-        let cert = self.parsed()?;
         if show_info {
+            let info = self.details()?;
             println!(">>> Certificate Information:");
-            println!("Serial : {}", serial_hex(&cert));
-            println!("Issuer : {}", cert.issuer());
-            println!("Subject: {}", cert.subject());
-            if let Some(san) = format_san(&cert) {
+            println!("Serial : {}", info.serial);
+            println!("Issuer : {}", info.issuer);
+            println!("Subject: {}", info.subject);
+            if let Some(san) = &info.san {
                 println!("Subject Alternative Name(s): {san}");
             }
-            println!(
-                "Certificate Inception:  {}",
-                format_asn1_time(&cert.validity().not_before)
-            );
-            println!(
-                "Certificate Expiration: {}",
-                format_asn1_time(&cert.validity().not_after)
-            );
+            println!("Certificate Inception:  {}", info.not_before);
+            println!("Certificate Expiration: {}", info.not_after);
         }
 
         let hash = self.spki_sha256_hex()?;

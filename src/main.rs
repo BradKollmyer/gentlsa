@@ -2,6 +2,8 @@ mod cert;
 mod cli;
 mod cloudflare;
 mod dns;
+mod output;
+mod report;
 mod tlsa;
 mod verbose;
 
@@ -13,6 +15,10 @@ use clap::Parser;
 use crate::cert::{Certificate, fetch_live};
 use crate::cli::{Cli, Command};
 use crate::cloudflare::Client as Cloudflare;
+use crate::report::{
+    CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, PruneResult, Report,
+    VerifyResult, ZoneRef,
+};
 use crate::tlsa::{connect_host, fqdn};
 
 #[tokio::main]
@@ -34,6 +40,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<u8> {
     let cli = Cli::parse();
     verbose::init(cli.verbose);
+    output::init(cli.json);
 
     match cli.command {
         Command::Generate {
@@ -46,8 +53,9 @@ async fn run() -> Result<u8> {
             dryrun,
         } => {
             let mut code = 0;
+            let mut results = Vec::new();
             for port in ports.as_slice() {
-                code = generate(
+                let (port_code, result) = generate(
                     &zone,
                     *port,
                     hostname.as_deref(),
@@ -57,6 +65,15 @@ async fn run() -> Result<u8> {
                     dryrun,
                 )
                 .await?;
+                code = port_code;
+                results.push(result);
+            }
+            if output::is_json() {
+                output::emit(&Report::Generate {
+                    zone,
+                    hostname,
+                    results,
+                })?;
             }
             Ok(code)
         }
@@ -84,8 +101,19 @@ async fn run() -> Result<u8> {
             dryrun,
         } => {
             let mut code = 0;
+            let mut results = Vec::new();
             for port in ports.as_slice() {
-                code = prune(&zone, *port, hostname.as_deref(), cloudflare, dryrun).await?;
+                let (port_code, result) =
+                    prune(&zone, *port, hostname.as_deref(), cloudflare, dryrun).await?;
+                code = port_code;
+                results.push(result);
+            }
+            if output::is_json() {
+                output::emit(&Report::Prune {
+                    zone,
+                    hostname,
+                    results,
+                })?;
             }
             Ok(code)
         }
@@ -98,11 +126,21 @@ async fn run() -> Result<u8> {
             let ports = ports.as_slice();
             let multi = ports.len() > 1;
             let mut worst = 0;
+            let mut results = Vec::new();
             for port in ports {
-                let code = verify(&zone, *port, hostname.as_deref(), info, multi).await;
-                if code > worst {
-                    worst = code;
+                let result = verify(&zone, *port, hostname.as_deref(), info, multi).await;
+                if result.exit > worst {
+                    worst = result.exit;
                 }
+                results.push(result);
+            }
+            if output::is_json() {
+                output::emit(&Report::Verify {
+                    zone,
+                    hostname,
+                    results,
+                    exit: worst,
+                })?;
             }
             Ok(worst)
         }
@@ -120,7 +158,13 @@ async fn run() -> Result<u8> {
             let ports = ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]);
             verbose::step(format_args!("file {}", certfile.display()));
             let cert = Certificate::from_file(&certfile)?;
-            cert.print_info(hostname.as_deref(), ports, info)?;
+            if !output::is_json() {
+                cert.print_info(hostname.as_deref(), ports, info)?;
+            }
+
+            let mut code = 0;
+            let mut cf_reports = Vec::new();
+            let mut error = None;
             if cloudflare {
                 let zone = zone
                     .as_deref()
@@ -128,9 +172,8 @@ async fn run() -> Result<u8> {
                 if ports.is_empty() {
                     anyhow::bail!("--port is required with --cloudflare");
                 }
-                let mut code = 0;
                 for port in ports {
-                    code = update_cloudflare(
+                    match update_cloudflare(
                         zone,
                         hostname.as_deref(),
                         *port,
@@ -139,11 +182,40 @@ async fn run() -> Result<u8> {
                         replace,
                         dryrun,
                     )
-                    .await?;
+                    .await?
+                    {
+                        UpdateCf::Published(report) => cf_reports.push(report),
+                        UpdateCf::NotManaged => {
+                            error = Some("not_managed_by_cloudflare".into());
+                            code = 1;
+                            break;
+                        }
+                    }
                 }
-                return Ok(code);
             }
-            Ok(0)
+
+            if output::is_json() {
+                let hash = cert.spki_sha256_hex()?;
+                verbose::step(format_args!("SPKI SHA-256 {hash}"));
+                output::emit(&Report::File {
+                    path: certfile.display().to_string(),
+                    usage: tlsa::USAGE,
+                    selector: tlsa::SELECTOR,
+                    matching: tlsa::MATCHING,
+                    certificate: hash,
+                    info: if info { Some(cert.details()?) } else { None },
+                    records: ports
+                        .iter()
+                        .map(|port| FileRecord {
+                            port: *port,
+                            owner: tlsa::owner_name(*port, hostname.as_deref()),
+                        })
+                        .collect(),
+                    cloudflare: cf_reports,
+                    error,
+                })?;
+            }
+            Ok(code)
         }
     }
 }
@@ -156,23 +228,51 @@ async fn generate(
     use_cloudflare: bool,
     replace: bool,
     dryrun: bool,
-) -> Result<u8> {
+) -> Result<(u8, GenerateResult)> {
     let host = connect_host(zone, hostname);
     verbose::step(format_args!("generate {host}:{port}"));
     let cert = fetch_live(&host, port)?;
-    cert.print_info(hostname, &[port], info)?;
-
-    if use_cloudflare {
-        return update_cloudflare(zone, hostname, port, &cert, info, replace, dryrun).await;
+    if !output::is_json() {
+        cert.print_info(hostname, &[port], info)?;
     }
-    Ok(0)
+    let hash = cert.spki_sha256_hex()?;
+    let mut result = GenerateResult::from_cert(
+        port,
+        host,
+        hostname,
+        hash,
+        if info { Some(cert.details()?) } else { None },
+    );
+
+    if !use_cloudflare {
+        return Ok((0, result));
+    }
+
+    match update_cloudflare(zone, hostname, port, &cert, info, replace, dryrun).await? {
+        UpdateCf::Published(report) => {
+            result.cloudflare = Some(report);
+            Ok((0, result))
+        }
+        UpdateCf::NotManaged => {
+            result.error = Some("not_managed_by_cloudflare".into());
+            Ok((1, result))
+        }
+    }
 }
 
-fn hash_tag(live_hash: Option<&str>, record_hash: &str) -> &'static str {
+fn hash_status(live_hash: Option<&str>, record_hash: &str) -> Option<&'static str> {
     match live_hash {
-        Some(live) if tlsa::hashes_equal(live, record_hash) => " (current)",
-        Some(_) => " (stale)",
-        None => "",
+        Some(live) if tlsa::hashes_equal(live, record_hash) => Some("current"),
+        Some(_) => Some("stale"),
+        None => None,
+    }
+}
+
+fn status_tag(status: Option<&str>) -> &'static str {
+    match status {
+        Some("current") => " (current)",
+        Some("stale") => " (stale)",
+        _ => "",
     }
 }
 
@@ -203,11 +303,25 @@ async fn list(
         hostname.unwrap_or("(none)")
     ));
 
+    let mut error = None;
     let cf_listed = if use_cloudflare {
         let cf = Cloudflare::from_env_or_config()
             .context("Please install/configure Cloudflare credentials for this to work.")?;
         let Some(zone) = cf.zone_by_name(zone_name).await? else {
-            println!("Not managed by cloudflare. Bailing.");
+            output::text("Not managed by cloudflare. Bailing.");
+            error = Some("not_managed_by_cloudflare".into());
+            if output::is_json() {
+                output::emit(&Report::List {
+                    zone: zone_name.to_string(),
+                    hostname: hostname.map(str::to_string),
+                    ports: ports.to_vec(),
+                    live: Vec::new(),
+                    dns: Vec::new(),
+                    cloudflare: None,
+                    note: None,
+                    error,
+                })?;
+            }
             return Ok(1);
         };
         let records = cf.list_tlsa(&zone, hostname, ports).await?;
@@ -257,53 +371,112 @@ async fn list(
         std::collections::BTreeMap::new()
     };
 
-    for (port, hash) in &live_by_port {
-        println!("Live _{port}._tcp TLSA 3 1 1 {hash}");
-    }
-
-    if ports.is_empty() && dns_names.is_empty() && cf_listed.is_none() {
-        println!(">>> DNS");
-        println!("(no port specified; pass 443 or 25,465 to query public DNS)");
-    } else if dns_names.is_empty() {
-        println!(">>> DNS");
-        println!("(none)");
+    let note = if ports.is_empty() && dns_names.is_empty() && cf_listed.is_none() {
+        Some("no port specified; pass 443 or 25,465 to query public DNS".to_string())
     } else {
+        None
+    };
+
+    let mut dns = Vec::new();
+    if note.is_none() && !dns_names.is_empty() {
         for name in &dns_names {
             let port = tlsa::port_from_owner(name);
             let live = port
                 .and_then(|port| live_by_port.get(&port))
                 .map(String::as_str);
-            println!(">>> DNS {name}");
             match dns::lookup_tlsa(name).await {
-                Ok(records) if records.is_empty() => println!("(none)"),
-                Ok(records) => {
-                    for record in records {
-                        println!("{}{}", record, hash_tag(live, &record.certificate));
-                    }
-                }
+                Ok(records) => dns.push(DnsName {
+                    name: name.clone(),
+                    records: records
+                        .iter()
+                        .map(|record| {
+                            JsonTlsa::from_dns(record, hash_status(live, &record.certificate))
+                        })
+                        .collect(),
+                    error: None,
+                }),
                 Err(err) => {
                     eprintln!("{err:#}");
-                    println!("(lookup failed)");
+                    dns.push(DnsName {
+                        name: name.clone(),
+                        records: Vec::new(),
+                        error: Some("lookup failed".into()),
+                    });
                 }
             }
         }
     }
 
-    if let Some((zone, records)) = &cf_listed {
-        println!(">>> Cloudflare {zone}");
-        if records.is_empty() {
-            println!("(none)");
-        } else {
-            for record in records {
+    let cloudflare = cf_listed.as_ref().map(|(zone, records)| CloudflareList {
+        zone: zone.clone(),
+        records: records
+            .iter()
+            .map(|record| {
                 let live = tlsa::port_from_owner(&record.name)
                     .and_then(|port| live_by_port.get(&port))
                     .map(String::as_str);
+                JsonTlsa::from_cf(record, hash_status(live, &record.certificate))
+            })
+            .collect(),
+    });
+
+    if output::is_json() {
+        output::emit(&Report::List {
+            zone: zone_name.to_string(),
+            hostname: hostname.map(str::to_string),
+            ports: ports.to_vec(),
+            live: live_by_port
+                .iter()
+                .map(|(port, hash)| LiveHash {
+                    port: *port,
+                    certificate: hash.clone(),
+                })
+                .collect(),
+            dns,
+            cloudflare,
+            note,
+            error,
+        })?;
+        return Ok(0);
+    }
+
+    for (port, hash) in &live_by_port {
+        println!("Live _{port}._tcp TLSA 3 1 1 {hash}");
+    }
+
+    if let Some(note) = note {
+        println!(">>> DNS");
+        println!("({note})");
+    } else if dns.is_empty() {
+        println!(">>> DNS");
+        println!("(none)");
+    } else {
+        for entry in &dns {
+            println!(">>> DNS {}", entry.name);
+            if let Some(err) = &entry.error {
+                println!("({err})");
+            } else if entry.records.is_empty() {
+                println!("(none)");
+            } else {
+                for record in &entry.records {
+                    println!("{}{}", record.to_text(), status_tag(record.status));
+                }
+            }
+        }
+    }
+
+    if let Some(cf) = &cloudflare {
+        println!(">>> Cloudflare {}", cf.zone);
+        if cf.records.is_empty() {
+            println!("(none)");
+        } else {
+            for record in &cf.records {
                 println!(
                     "{}  {}  {}{}",
-                    record.id,
-                    record.name,
+                    record.id.as_deref().unwrap_or("-"),
+                    record.name.as_deref().unwrap_or("-"),
                     record.to_text(),
-                    hash_tag(live, &record.certificate)
+                    status_tag(record.status)
                 );
             }
         }
@@ -317,7 +490,7 @@ async fn prune(
     hostname: Option<&str>,
     use_cloudflare: bool,
     dryrun: bool,
-) -> Result<u8> {
+) -> Result<(u8, PruneResult)> {
     let host = connect_host(zone_name, hostname);
     verbose::step(format_args!(
         "prune {host}:{port} cloudflare={use_cloudflare} dryrun={dryrun}"
@@ -325,44 +498,86 @@ async fn prune(
     let cert = fetch_live(&host, port)?;
     let live_hash = cert.spki_sha256_hex()?;
     verbose::step(format_args!("live SPKI SHA-256 {live_hash}"));
-    println!("Live TLSA 3 1 1 {live_hash}");
+    output::text(format!("Live TLSA 3 1 1 {live_hash}"));
 
     let name = fqdn(zone_name, port, hostname);
+    let mut dns_records = Vec::new();
     match dns::lookup_tlsa(&name).await {
-        Ok(records) if records.is_empty() => println!("DNS: no TLSA records for {name}"),
+        Ok(records) if records.is_empty() => {
+            output::text(format!("DNS: no TLSA records for {name}"));
+        }
         Ok(records) => {
             for record in &records {
-                let stale = !tlsa::hashes_equal(&live_hash, &record.certificate);
-                println!(
+                let status = hash_status(Some(&live_hash), &record.certificate);
+                output::text(format!(
                     "DNS: {} {}",
                     record,
-                    if stale { "(stale)" } else { "(current)" }
-                );
+                    if status == Some("stale") {
+                        "(stale)"
+                    } else {
+                        "(current)"
+                    }
+                ));
+                dns_records.push(JsonTlsa::from_dns(record, status));
             }
         }
         Err(err) => eprintln!("{err:#}"),
     }
 
-    if use_cloudflare {
-        let cf = Cloudflare::from_env_or_config()
-            .context("Please install/configure Cloudflare credentials for this to work.")?;
-        let Some(zone) = cf.zone_by_name(zone_name).await? else {
-            println!("Not managed by cloudflare. Bailing.");
-            return Ok(1);
-        };
-        cf.prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
-            .await?;
+    let mut result = PruneResult {
+        port,
+        host,
+        live: live_hash.clone(),
+        dns: dns_records,
+        cloudflare: None,
+        error: None,
+    };
+
+    if !use_cloudflare {
+        return Ok((0, result));
     }
-    Ok(0)
+
+    let cf = Cloudflare::from_env_or_config()
+        .context("Please install/configure Cloudflare credentials for this to work.")?;
+    let Some(zone) = cf.zone_by_name(zone_name).await? else {
+        output::text("Not managed by cloudflare. Bailing.");
+        result.error = Some("not_managed_by_cloudflare".into());
+        return Ok((1, result));
+    };
+    result.cloudflare = Some(
+        cf.prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
+            .await?,
+    );
+    Ok((0, result))
 }
 
-async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefix: bool) -> u8 {
+async fn verify(
+    zone: &str,
+    port: u16,
+    hostname: Option<&str>,
+    info: bool,
+    prefix: bool,
+) -> VerifyResult {
     let say = |msg: &str| {
+        if output::is_json() {
+            return;
+        }
         if prefix {
             println!("{port}: {msg}");
         } else {
             println!("{msg}");
         }
+    };
+
+    let unknown = |message: &str, name: String, live, dns, info| VerifyResult {
+        port,
+        name,
+        status: "unknown",
+        message: message.to_string(),
+        exit: 3,
+        live,
+        dns,
+        info,
     };
 
     let host = connect_host(zone, hostname);
@@ -373,7 +588,13 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
         Err(err) => {
             eprintln!("{err:#}");
             say("UNKNOWN - Something went wrong. Check logs");
-            return 3;
+            return unknown(
+                "UNKNOWN - Something went wrong. Check logs",
+                name,
+                None,
+                Vec::new(),
+                None,
+            );
         }
     };
 
@@ -382,29 +603,93 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
         Err(err) => {
             eprintln!("{err:#}");
             say("UNKNOWN - Something went wrong. Check logs");
-            return 3;
+            return unknown(
+                "UNKNOWN - Something went wrong. Check logs",
+                name,
+                None,
+                dns_record
+                    .iter()
+                    .map(|record| JsonTlsa::from_dns(record, None))
+                    .collect(),
+                None,
+            );
         }
     };
 
-    if info && let Err(err) = cert.print_info(hostname, &[port], true) {
-        eprintln!("{err:#}");
-        say("UNKNOWN - Something went wrong. Check logs");
-        return 3;
-    }
+    let info_block = if info {
+        if output::is_json() {
+            match cert.details() {
+                Ok(details) => Some(details),
+                Err(err) => {
+                    eprintln!("{err:#}");
+                    say("UNKNOWN - Something went wrong. Check logs");
+                    return unknown(
+                        "UNKNOWN - Something went wrong. Check logs",
+                        name,
+                        None,
+                        dns_record
+                            .iter()
+                            .map(|record| JsonTlsa::from_dns(record, None))
+                            .collect(),
+                        None,
+                    );
+                }
+            }
+        } else if let Err(err) = cert.print_info(hostname, &[port], true) {
+            eprintln!("{err:#}");
+            say("UNKNOWN - Something went wrong. Check logs");
+            return unknown(
+                "UNKNOWN - Something went wrong. Check logs",
+                name,
+                None,
+                dns_record
+                    .iter()
+                    .map(|record| JsonTlsa::from_dns(record, None))
+                    .collect(),
+                None,
+            );
+        } else {
+            cert.details().ok()
+        }
+    } else {
+        None
+    };
 
     let host_hash = match cert.spki_sha256_hex() {
         Ok(hash) => hash,
         Err(err) => {
             eprintln!("{err:#}");
             say("UNKNOWN - Something went wrong. Check logs");
-            return 3;
+            return unknown(
+                "UNKNOWN - Something went wrong. Check logs",
+                name,
+                None,
+                dns_record
+                    .iter()
+                    .map(|record| JsonTlsa::from_dns(record, None))
+                    .collect(),
+                info_block,
+            );
         }
     };
+
+    let dns = dns_record
+        .iter()
+        .map(|record| {
+            JsonTlsa::from_dns(record, hash_status(Some(&host_hash), &record.certificate))
+        })
+        .collect();
 
     if dns_record.is_empty() {
         verbose::step(format_args!("no TLSA records at {name}"));
         say("UNKNOWN - Something went wrong. Check logs");
-        return 3;
+        return unknown(
+            "UNKNOWN - Something went wrong. Check logs",
+            name,
+            Some(host_hash),
+            dns,
+            info_block,
+        );
     }
 
     if dns_record
@@ -413,7 +698,16 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
     {
         verbose::step("live hash matches a DNS TLSA record");
         say("OK - TLSA is valid");
-        0
+        VerifyResult {
+            port,
+            name,
+            status: "ok",
+            message: "OK - TLSA is valid".into(),
+            exit: 0,
+            live: Some(host_hash),
+            dns,
+            info: info_block,
+        }
     } else {
         verbose::step(format_args!(
             "live hash {host_hash} does not match any DNS TLSA record"
@@ -423,9 +717,24 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ");
-        say(&format!("ERROR - TLSA invalid: {host_hash} != {dns_text}"));
-        2
+        let message = format!("ERROR - TLSA invalid: {host_hash} != {dns_text}");
+        say(&message);
+        VerifyResult {
+            port,
+            name,
+            status: "error",
+            message,
+            exit: 2,
+            live: Some(host_hash),
+            dns,
+            info: info_block,
+        }
     }
+}
+
+enum UpdateCf {
+    Published(cloudflare::PublishReport),
+    NotManaged,
 }
 
 async fn update_cloudflare(
@@ -436,15 +745,15 @@ async fn update_cloudflare(
     info: bool,
     replace: bool,
     dryrun: bool,
-) -> Result<u8> {
+) -> Result<UpdateCf> {
     verbose::step(format_args!(
         "Cloudflare publish zone={zone_name} port={port} replace={replace} dryrun={dryrun}"
     ));
     let cf = Cloudflare::from_env_or_config()
         .context("Please install/configure Cloudflare credentials for this to work.")?;
     let Some(zone) = cf.zone_by_name(zone_name).await? else {
-        println!("Not managed by cloudflare. Bailing.");
-        return Ok(1);
+        output::text("Not managed by cloudflare. Bailing.");
+        return Ok(UpdateCf::NotManaged);
     };
     if info {
         cf.print_zone_info(&zone);
@@ -455,33 +764,67 @@ async fn update_cloudflare(
     } else {
         cloudflare::PublishMode::Rollover
     };
-    cf.publish_tlsa(&zone, hostname, port, &hash, mode, dryrun)
+    let mut report = cf
+        .publish_tlsa(&zone, hostname, port, &hash, mode, dryrun)
         .await?;
-    Ok(0)
+    if info {
+        report.info = Some(cloudflare::ZoneInfo::from_zone(&zone));
+    }
+    Ok(UpdateCf::Published(report))
 }
 
 async fn cloudflare_cmd(info: bool, listzones: bool) -> Result<u8> {
+    let show_zones = listzones || !info;
     verbose::step(format_args!(
-        "cloudflare info={info} listzones={}",
-        listzones || !info
+        "cloudflare info={info} listzones={show_zones}"
     ));
     let cf = Cloudflare::from_env_or_config()
         .context("Please install/configure Cloudflare credentials for this to work.")?;
-    if info {
-        println!(">>> Cloudflare Information:");
-        println!("Auth: {}", cf.auth_label());
-    }
 
-    if listzones || !info {
+    let auth = if info {
+        output::text(">>> Cloudflare Information:");
+        output::text(format!("Auth: {}", cf.auth_label()));
+        Some(cf.auth_label().to_string())
+    } else {
+        None
+    };
+
+    let zones = if show_zones {
         let zones = cf.list_zones().await?;
-        if zones.is_empty() {
+        if output::is_json() {
+            Some(
+                zones
+                    .into_iter()
+                    .map(|zone| ZoneRef {
+                        id: zone.id,
+                        name: zone.name,
+                    })
+                    .collect(),
+            )
+        } else if zones.is_empty() {
             println!("No Cloudflare zones found.");
+            Some(Vec::new())
         } else {
             println!(">>> Cloudflare Zones:");
-            for zone in zones {
+            for zone in &zones {
                 println!("{}  {}", zone.id, zone.name);
             }
+            Some(
+                zones
+                    .into_iter()
+                    .map(|zone| ZoneRef {
+                        id: zone.id,
+                        name: zone.name,
+                    })
+                    .collect(),
+            )
         }
+    } else {
+        None
+    };
+
+    if output::is_json() {
+        output::emit(&Report::Cloudflare { auth, zones })?;
     }
     Ok(0)
 }

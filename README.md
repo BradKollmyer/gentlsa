@@ -77,17 +77,19 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa [-v|--verbose] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
-gentlsa [-v|--verbose] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare] [--info]
-gentlsa [-v|--verbose] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
-gentlsa [-v|--verbose] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
-gentlsa [-v|--verbose] cloudflare [--info] [--listzones]
-gentlsa [-v|--verbose] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare]
+gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
+gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare] [--info]
+gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
+gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
+gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
+gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare]
 ```
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
 
 `-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, Cloudflare API). Regular output stays on stdout, so `verify` remains Nagios-safe.
+
+`--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `2` / `3`) and puts the OK/ERROR/UNKNOWN result in `status`, `message`, and `exit`.
 
 ```
 $ gentlsa generate example.com 443 -v
@@ -107,6 +109,27 @@ Fetch the live certificate and print a zone-file style TLSA record:
 ```
 $ gentlsa generate example.com 443
 _443._tcp TLSA 3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
+```
+
+`--json` wraps the same data:
+
+```
+$ gentlsa generate example.com 443 --json
+{
+  "command": "generate",
+  "zone": "example.com",
+  "results": [
+    {
+      "port": 443,
+      "host": "example.com",
+      "owner": "_443._tcp",
+      "usage": 3,
+      "selector": 1,
+      "matching": 1,
+      "certificate": "0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b"
+    }
+  ]
+}
 ```
 
 `--info` adds leaf-certificate details:

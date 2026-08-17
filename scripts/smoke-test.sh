@@ -28,4 +28,18 @@ printf '%s\n' "$out" | grep -q "_443._tcp TLSA 3 1 1" || {
     echo "expected TLSA 3 1 1 record line" >&2
     exit 1
 }
+json="$("$bin" --json file "$cert" --port 443)"
+printf '%s\n' "$json"
+printf '%s\n' "$json" | grep -q '"command": "file"' || {
+    echo "expected JSON command field" >&2
+    exit 1
+}
+printf '%s\n' "$json" | grep -q "$hash" || {
+    echo "expected SPKI SHA-256 $hash in JSON output" >&2
+    exit 1
+}
+if printf '%s\n' "$json" | grep -q '>>> Certificate'; then
+    echo "JSON output should not include text headers" >&2
+    exit 1
+fi
 echo "smoke test passed: $bin"

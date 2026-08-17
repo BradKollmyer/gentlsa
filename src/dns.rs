@@ -5,7 +5,7 @@ use hickory_resolver::proto::rr::rdata::TLSA;
 
 use crate::verbose;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TlsaRecord {
     pub usage: u8,
     pub selector: u8,

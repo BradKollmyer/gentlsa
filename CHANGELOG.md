@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `--json` to emit a single JSON object on stdout
 - Add `-v` / `--verbose` to print each processing step on stderr
 - Accept a comma-separated port list (`25,465`) on generate, list, prune, verify, and file
 - `list` with no ports shows records for every port

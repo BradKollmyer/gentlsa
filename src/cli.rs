@@ -51,6 +51,10 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
+    /// Emit a single JSON object on stdout instead of text
+    #[arg(long, global = true)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -222,5 +226,15 @@ mod tests {
 
         let off = Cli::try_parse_from(["gentlsa", "list", "example.com"]).unwrap();
         assert!(!off.verbose);
+        assert!(!off.json);
+    }
+
+    #[test]
+    fn clap_global_json() {
+        let before = Cli::try_parse_from(["gentlsa", "--json", "list", "example.com"]).unwrap();
+        assert!(before.json);
+
+        let after = Cli::try_parse_from(["gentlsa", "file", "cert.pem", "--json"]).unwrap();
+        assert!(after.json);
     }
 }
