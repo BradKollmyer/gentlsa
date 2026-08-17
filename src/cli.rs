@@ -199,6 +199,9 @@ pub enum Command {
         /// Critical when the live certificate expires in this many days or fewer
         #[arg(long, default_value_t = 7, value_name = "DAYS")]
         critical: u32,
+        /// Check the TLSA hash only, ignoring certificate expiry (pre-0.4.1 behavior)
+        #[arg(long, conflicts_with_all = ["warn", "critical"])]
+        no_expiry_check: bool,
     },
     /// Cloudflare helpers
     Cloudflare {

@@ -32,7 +32,7 @@ sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/downloa
 sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
 ```
 
-Or download the versioned file (`gentlsa-0.4.1-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`. Same files if you `rpm -i` the package. After install, enable the resume timer if you use `rollover`:
+Or download the versioned file (`gentlsa-0.4.2-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`. Same files if you `rpm -i` the package. After install, enable the resume timer if you use `rollover`:
 
 ```
 sudo systemctl enable --now gentlsa-resume.timer
@@ -59,7 +59,7 @@ FreeBSD (installs `/usr/local/bin/gentlsa` only — no systemd units):
 sudo pkg add https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.amd64.pkg
 ```
 
-Or download the versioned file (`gentlsa-0.4.1.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package. Resume an interrupted rollover with `gentlsa rollover --resume` from cron or `@reboot`.
+Or download the versioned file (`gentlsa-0.4.2.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package. Resume an interrupted rollover with `gentlsa rollover --resume` from cron or `@reboot`.
 
 Windows (PowerShell):
 
@@ -102,7 +102,7 @@ gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOS
 
 `-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, publisher APIs). Regular output stays on stdout, so `verify` remains Nagios-safe.
 
-`--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `1` / `2` / `3`) and puts the OK/WARNING/ERROR/UNKNOWN result in `status`, `message`, and `exit`.
+`--json` prints one JSON object on stdout instead of text. `--verbose` can still be combined; steps stay on stderr. `verify --json` keeps the same exit codes (`0` / `1` / `2` / `3`) and puts the result in `status` (`ok` / `warning` / `critical` / `error` / `unknown`), `message`, and `exit`.
 
 ```
 $ gentlsa generate example.com 443 -v
@@ -174,22 +174,26 @@ $ gentlsa generate example.com 25 --hostname mx --cloudflare --dryrun
 
 ### verify
 
-Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate (Nagios-compatible). After a hash match, remaining days until `notAfter` are checked against `--warn` (default 14) and `--critical` (default 7). `--critical` cannot be greater than `--warn`. A hash mismatch stays `ERROR` even if the cert is also expiring.
+Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate (Nagios-compatible). After a hash match, remaining days until `notAfter` are checked against `--warn` (default 14) and `--critical` (default 7). `--critical` cannot be greater than `--warn` (rejected with exit 3, UNKNOWN). `--no-expiry-check` skips the expiry check and restores the hash-only verdict (the pre-0.4.1 exit behavior). A hash mismatch stays `ERROR` even if the cert is also expiring.
 
 | Exit | Output | Meaning |
 |------|--------|---------|
 | 0 | `OK - TLSA is valid` | At least one DNS TLSA hash matches, and the cert expires after `--warn` days |
 | 1 | `WARNING - certificate expires in N days` | Hash matches, days left ≤ `--warn` |
-| 2 | `CRITICAL - certificate expires in N days` | Hash matches, days left ≤ `--critical`, already expired, or not yet valid |
+| 2 | `CRITICAL - certificate expires in N days` | Hash matches, days left ≤ `--critical` (`expires in 1 day` / `expires today` near zero) |
+| 2 | `CRITICAL - certificate expired` | Hash matches, `notAfter` has passed |
+| 2 | `CRITICAL - certificate is not yet valid` | Hash matches, `notBefore` has not been reached |
 | 2 | `ERROR - TLSA invalid: ...` | DNS has TLSA records, none match |
 | 3 | `UNKNOWN - Something went wrong. Check logs` | Lookup or connection failed |
+
+With a port list, the overall exit is the worst result by Nagios severity: CRITICAL > WARNING > UNKNOWN > OK, so a transient lookup failure on one port cannot hide a CRITICAL on another.
 
 ```
 $ gentlsa verify www.freebsd.org 443
 OK - TLSA is valid
 ```
 
-`--info` prints the live certificate before the OK/WARNING/CRITICAL/ERROR/UNKNOWN line. JSON includes `expires_in_days` on each result when a live cert was fetched.
+`--info` prints the live certificate before the OK/WARNING/CRITICAL/ERROR/UNKNOWN line. In JSON, each result's `status` is `ok`, `warning`, `critical` (expiry), `error` (TLSA mismatch), or `unknown`, and `expires_in_days` is included when the result was computed from a fetched live certificate (it is omitted on failed lookups, connections, and parses).
 
 ### list
 
@@ -497,8 +501,8 @@ Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag
 
 ```
 # bump version in Cargo.toml and CHANGELOG.md
-git commit -am "release: 0.4.1"
-git tag v0.4.1
+git commit -am "release: 0.4.2"
+git tag v0.4.2
 git push && git push --tags
 ```
 

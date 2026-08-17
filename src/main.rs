@@ -27,7 +27,7 @@ use crate::publish::{PublishMode, PublishReport, PublisherKind};
 use crate::report::{
     CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, NsupdateList,
     ProviderList, PruneResult, ReloadReport, Report, ResumeJob, RolloverPublish, VerifyResult,
-    ZoneRef, apply_expiry, verify_outcome, worst_verify_exit,
+    ZoneRef, apply_expiry, expiry_phrase, verify_outcome, worst_verify_exit,
 };
 use crate::route53::Client as Route53;
 use crate::tlsa::{connect_host, fqdn};
@@ -168,26 +168,28 @@ async fn run() -> Result<u8> {
             info,
             warn,
             critical,
+            no_expiry_check,
         } => {
             if critical > warn {
-                anyhow::bail!("--critical ({critical}) cannot be greater than --warn ({warn})");
+                output::text(format!(
+                    "UNKNOWN - --critical ({critical}) cannot be greater than --warn ({warn})"
+                ));
+                if output::is_json() {
+                    output::emit(&Report::Verify {
+                        zone,
+                        hostname,
+                        results: Vec::new(),
+                        exit: 3,
+                    })?;
+                }
+                return Ok(3);
             }
+            let expiry = (!no_expiry_check).then_some((warn, critical));
             let ports = ports.as_slice();
             let multi = ports.len() > 1;
             let mut results = Vec::new();
             for port in ports {
-                results.push(
-                    verify(
-                        &zone,
-                        *port,
-                        hostname.as_deref(),
-                        info,
-                        multi,
-                        warn,
-                        critical,
-                    )
-                    .await,
-                );
+                results.push(verify(&zone, *port, hostname.as_deref(), info, multi, expiry).await);
             }
             let worst = worst_verify_exit(results.iter().map(|result| result.exit));
             if output::is_json() {
@@ -1346,8 +1348,7 @@ async fn verify(
     hostname: Option<&str>,
     info: bool,
     prefix: bool,
-    warn: u32,
-    critical: u32,
+    expiry: Option<(u32, u32)>,
 ) -> VerifyResult {
     let say = |msg: &str| {
         if output::is_json() {
@@ -1460,23 +1461,11 @@ async fn verify(
         .map(|record| JsonTlsa::from_dns(record, Some(&host_hash)))
         .collect();
 
-    let lifetime = match cert.lifetime() {
-        Ok(lifetime) => lifetime,
-        Err(err) => {
-            eprintln!("{err:#}");
-            return fail(name, Some(host_hash), dns, info_block);
-        }
-    };
-    if lifetime.not_yet_valid {
-        verbose::step("certificate is not yet valid");
-    } else if lifetime.days_left < 0 {
-        verbose::step("certificate has expired");
-    } else {
-        verbose::step(format_args!(
-            "certificate expires in {} days",
-            lifetime.days_left
-        ));
-    }
+    let lifetime = cert.lifetime();
+    verbose::step(format_args!(
+        "certificate {}",
+        expiry_phrase(lifetime.days_left, lifetime.not_yet_valid)
+    ));
 
     let mut outcome = verify_outcome(Some(&host_hash), &dns_record);
     match outcome.exit {
@@ -1486,13 +1475,15 @@ async fn verify(
         )),
         _ => verbose::step(format_args!("no TLSA records at {name}")),
     }
-    outcome = apply_expiry(
-        outcome,
-        lifetime.days_left,
-        lifetime.not_yet_valid,
-        warn,
-        critical,
-    );
+    if let Some((warn, critical)) = expiry {
+        outcome = apply_expiry(
+            outcome,
+            lifetime.days_left,
+            lifetime.not_yet_valid,
+            warn,
+            critical,
+        );
+    }
     say(&outcome.message);
     VerifyResult {
         port,

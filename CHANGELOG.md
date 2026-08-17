@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 - 2026-08-17
+
+- `verify --no-expiry-check` restores the hash-only verdict (the pre-0.4.1 exit behavior, where a matching cert near expiry still exits 0)
+- `verify` rejects `--critical` greater than `--warn` with exit 3 (UNKNOWN) instead of 1, and still emits a JSON object with `--json`
+- `verify --json` reports expiry-driven CRITICAL results as `"status": "critical"` (previously `"error"`, indistinguishable from a TLSA mismatch)
+- `verify` with a port list picks the overall exit by Nagios severity (CRITICAL > WARNING > UNKNOWN > OK) instead of the numeric maximum, so an UNKNOWN no longer hides a CRITICAL
+
 ## 0.4.1 - 2026-08-17
 
 - `verify` warns (exit 1) or goes critical (exit 2) when the live certificate is near expiry (`--warn` / `--critical`, default 14 / 7 days)

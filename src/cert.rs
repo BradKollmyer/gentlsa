@@ -44,12 +44,26 @@ pub struct CertLifetime {
 #[derive(Debug, Clone)]
 pub struct Certificate {
     der: Vec<u8>,
+    not_before_ts: i64,
+    not_after_ts: i64,
 }
 
 impl Certificate {
     pub fn from_der(der: Vec<u8>) -> Result<Self> {
-        X509Certificate::from_der(&der).context("failed to parse certificate")?;
-        Ok(Self { der })
+        let (not_before_ts, not_after_ts) = {
+            let (_, cert) =
+                X509Certificate::from_der(&der).context("failed to parse certificate")?;
+            let validity = cert.validity();
+            (
+                validity.not_before.timestamp(),
+                validity.not_after.timestamp(),
+            )
+        };
+        Ok(Self {
+            der,
+            not_before_ts,
+            not_after_ts,
+        })
     }
 
     pub fn from_pem_or_der(bytes: &[u8]) -> Result<Self> {
@@ -93,15 +107,15 @@ impl Certificate {
         })
     }
 
-    pub fn lifetime(&self) -> Result<CertLifetime> {
-        let cert = self.parsed()?;
-        let now = ASN1Time::now();
-        let days_left =
-            (cert.validity().not_after.timestamp() - now.timestamp()).div_euclid(86_400);
-        Ok(CertLifetime {
-            days_left,
-            not_yet_valid: now < cert.validity().not_before,
-        })
+    pub fn lifetime(&self) -> CertLifetime {
+        self.lifetime_at(ASN1Time::now().timestamp())
+    }
+
+    fn lifetime_at(&self, now: i64) -> CertLifetime {
+        CertLifetime {
+            days_left: (self.not_after_ts - now).div_euclid(86_400),
+            not_yet_valid: now < self.not_before_ts,
+        }
     }
 
     /// TLSA selector 0: SHA-256 of the full certificate.
@@ -424,13 +438,18 @@ mod tests {
 
     #[test]
     fn lifetime_matches_not_after() {
+        // The fixture is valid 2026-08-16 22:40:10 UTC to 2026-08-17 22:40:10 UTC.
+        const NOT_BEFORE: i64 = 1_786_920_010;
+        const NOT_AFTER: i64 = 1_787_006_410;
         let cert = Certificate::from_pem_or_der(TEST_CERT_PEM.as_bytes()).unwrap();
-        let parsed = cert.parsed().unwrap();
-        let now = ASN1Time::now();
-        let expected =
-            (parsed.validity().not_after.timestamp() - now.timestamp()).div_euclid(86_400);
-        let lifetime = cert.lifetime().unwrap();
-        assert_eq!(lifetime.days_left, expected);
-        assert_eq!(lifetime.not_yet_valid, now < parsed.validity().not_before);
+
+        let fresh = cert.lifetime_at(NOT_BEFORE);
+        assert_eq!(fresh.days_left, 1);
+        assert!(!fresh.not_yet_valid);
+
+        assert!(cert.lifetime_at(NOT_BEFORE - 1).not_yet_valid);
+        assert_eq!(cert.lifetime_at(NOT_AFTER - 1).days_left, 0);
+        assert_eq!(cert.lifetime_at(NOT_AFTER).days_left, 0);
+        assert_eq!(cert.lifetime_at(NOT_AFTER + 1).days_left, -1);
     }
 }
