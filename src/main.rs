@@ -1,3 +1,4 @@
+mod azure;
 mod cert;
 mod cli;
 mod cloudflare;
@@ -17,6 +18,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 
+use crate::azure::Client as Azure;
 use crate::cert::{CertDetails, Certificate, fetch_live};
 use crate::cli::PublisherFlags;
 use crate::cli::{Cli, Command};
@@ -142,7 +144,7 @@ async fn run() -> Result<u8> {
                 return resume_cmd(filter.as_deref(), info, dryrun).await;
             }
             let kind = publisher.kind().with_context(
-                || "rollover requires --cloudflare, --nsupdate, --route53, or --google",
+                || "rollover requires --cloudflare, --nsupdate, --route53, --google, or --azure",
             )?;
             let certfile = certfile.context("CERTFILE is required")?;
             let zone = zone.context("ZONE is required")?;
@@ -231,6 +233,7 @@ async fn run() -> Result<u8> {
         Command::Nsupdate { info } => nsupdate_cmd(info).await,
         Command::Route53 { info, listzones } => route53_cmd(info, listzones).await,
         Command::Google { info, listzones } => google_cmd(info, listzones).await,
+        Command::Azure { info, listzones } => azure_cmd(info, listzones).await,
         Command::File {
             certfile,
             zone,
@@ -305,6 +308,7 @@ async fn run() -> Result<u8> {
                     nsupdate: reports.nsupdate,
                     route53: reports.route53,
                     google: reports.google,
+                    azure: reports.azure,
                     error,
                 })?;
             }
@@ -340,7 +344,9 @@ impl PublisherOpts {
             dryrun,
         };
         if opts.replace && opts.kind.is_none() {
-            anyhow::bail!("--replace requires --cloudflare, --nsupdate, --route53, or --google");
+            anyhow::bail!(
+                "--replace requires --cloudflare, --nsupdate, --route53, --google, or --azure"
+            );
         }
         Ok(opts)
     }
@@ -352,6 +358,7 @@ struct PublisherReports {
     nsupdate: Vec<PublishReport>,
     route53: Vec<PublishReport>,
     google: Vec<PublishReport>,
+    azure: Vec<PublishReport>,
 }
 
 impl PublisherReports {
@@ -361,6 +368,7 @@ impl PublisherReports {
             PublisherKind::Nsupdate => self.nsupdate.push(report),
             PublisherKind::Route53 => self.route53.push(report),
             PublisherKind::Google => self.google.push(report),
+            PublisherKind::Azure => self.azure.push(report),
         }
     }
 }
@@ -646,6 +654,7 @@ async fn execute_rollover(
                         nsupdate: None,
                         route53: None,
                         google: None,
+                        azure: None,
                         error: None,
                     };
                     match publish_cert(kind, &zone, hostname, *port, &cert, info, publisher).await?
@@ -655,6 +664,7 @@ async fn execute_rollover(
                             PublisherKind::Nsupdate => item.nsupdate = Some(report),
                             PublisherKind::Route53 => item.route53 = Some(report),
                             PublisherKind::Google => item.google = Some(report),
+                            PublisherKind::Azure => item.azure = Some(report),
                         },
                         PublishOutcome::NotManaged(code_name) => {
                             item.error = Some(code_name.into());
@@ -855,6 +865,7 @@ async fn generate(
                 PublisherKind::Nsupdate => result.nsupdate = Some(report),
                 PublisherKind::Route53 => result.route53 = Some(report),
                 PublisherKind::Google => result.google = Some(report),
+                PublisherKind::Azure => result.azure = Some(report),
             }
             Ok((0, result))
         }
@@ -962,6 +973,22 @@ async fn list(
                 records: gcloud.list_tlsa(&zone, hostname, ports).await?,
             })
         }
+        Some(PublisherKind::Azure) => {
+            let azure = Azure::from_env_or_config()
+                .context("Please configure Azure DNS in /etc/gentlsa/azure.cfg")?;
+            let Some(zone) = azure.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Azure DNS. Bailing.");
+                error = Some("not_managed_by_azure".into());
+                if output::is_json() {
+                    emit_empty_list(zone_name, hostname, ports, error.clone())?;
+                }
+                return Ok(1);
+            };
+            Some(ListedSource::Azure {
+                zone: zone.name.clone(),
+                records: azure.list_tlsa(&zone, hostname, ports).await?,
+            })
+        }
         None => None,
     };
 
@@ -1035,6 +1062,7 @@ async fn list(
     let mut nsupdate = None;
     let mut route53 = None;
     let mut google = None;
+    let mut azure = None;
     match &listed {
         Some(ListedSource::Cloudflare { zone, records }) => {
             cloudflare = Some(CloudflareList {
@@ -1075,6 +1103,9 @@ async fn list(
         Some(ListedSource::Google { zone, records }) => {
             google = Some(json_provider_list(zone, records, &live_by_port));
         }
+        Some(ListedSource::Azure { zone, records }) => {
+            azure = Some(json_provider_list(zone, records, &live_by_port));
+        }
         None => {}
     }
 
@@ -1095,6 +1126,7 @@ async fn list(
             nsupdate,
             route53,
             google,
+            azure,
             note,
             error,
         })?;
@@ -1170,6 +1202,9 @@ async fn list(
     if let Some(gcloud) = &google {
         print_provider_list("Google Cloud DNS", gcloud);
     }
+    if let Some(azure) = &azure {
+        print_provider_list("Azure DNS", azure);
+    }
     Ok(0)
 }
 
@@ -1191,6 +1226,10 @@ enum ListedSource {
         zone: String,
         records: Vec<publish::ListedTlsa>,
     },
+    Azure {
+        zone: String,
+        records: Vec<publish::ListedTlsa>,
+    },
 }
 
 impl ListedSource {
@@ -1202,7 +1241,9 @@ impl ListedSource {
             Self::Nsupdate { records, .. } => {
                 records.iter().map(|record| record.name.clone()).collect()
             }
-            Self::Route53 { records, .. } | Self::Google { records, .. } => {
+            Self::Route53 { records, .. }
+            | Self::Google { records, .. }
+            | Self::Azure { records, .. } => {
                 records.iter().map(|record| record.name.clone()).collect()
             }
         }
@@ -1260,6 +1301,7 @@ fn emit_empty_list(
         nsupdate: None,
         route53: None,
         google: None,
+        azure: None,
         note: None,
         error,
     })
@@ -1327,6 +1369,7 @@ async fn prune(
         nsupdate: None,
         route53: None,
         google: None,
+        azure: None,
         error: None,
     };
 
@@ -1375,6 +1418,20 @@ async fn prune(
             };
             result.google = Some(
                 gcloud
+                    .prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
+                    .await?,
+            );
+        }
+        Some(PublisherKind::Azure) => {
+            let azure = Azure::from_env_or_config()
+                .context("Please configure Azure DNS in /etc/gentlsa/azure.cfg")?;
+            let Some(zone) = azure.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Azure DNS. Bailing.");
+                result.error = Some("not_managed_by_azure".into());
+                return Ok((1, result));
+            };
+            result.azure = Some(
+                azure
                     .prune_tlsa(&zone, hostname, port, &live_hash, dryrun)
                     .await?,
             );
@@ -1668,6 +1725,29 @@ async fn publish_cert(
             }
             Ok(PublishOutcome::Published(report))
         }
+        PublisherKind::Azure => {
+            let azure = Azure::from_env_or_config()
+                .context("Please configure Azure DNS in /etc/gentlsa/azure.cfg")?;
+            let Some(zone) = azure.zone_by_name(zone_name).await? else {
+                output::text("Not managed by Azure DNS. Bailing.");
+                return Ok(PublishOutcome::NotManaged("not_managed_by_azure"));
+            };
+            if info {
+                azure.print_zone_info(&zone);
+            }
+            let mut report = azure
+                .publish_tlsa(&zone, hostname, port, &hash, mode, publisher.dryrun)
+                .await?;
+            if info {
+                report.info = Some(serde_json::to_value(azure::ZoneInfo {
+                    subscription: azure.subscription().to_string(),
+                    resource_group: zone.resource_group,
+                    name: zone.name,
+                    id: zone.id,
+                })?);
+            }
+            Ok(PublishOutcome::Published(report))
+        }
     }
 }
 
@@ -1841,5 +1921,58 @@ fn google_zone_ref(zone: google::ManagedZone) -> ZoneRef {
     ZoneRef {
         id: zone.name,
         name: zone.dns_name.trim_end_matches('.').to_string(),
+    }
+}
+
+async fn azure_cmd(info: bool, listzones: bool) -> Result<u8> {
+    let show_zones = listzones || !info;
+    verbose::step(format_args!("azure info={info} listzones={show_zones}"));
+    let azure = Azure::from_env_or_config()
+        .context("Please configure Azure DNS in /etc/gentlsa/azure.cfg")?;
+
+    let (auth, subscription) = if info {
+        output::text(">>> Azure DNS Information:");
+        output::text(format!("Auth: {}", azure.auth_label()));
+        output::text(format!("Subscription: {}", azure.subscription()));
+        (
+            Some(azure.auth_label()),
+            Some(azure.subscription().to_string()),
+        )
+    } else {
+        (None, None)
+    };
+
+    let zones = if show_zones {
+        let zones = azure.list_zones().await?;
+        if output::is_json() {
+            Some(zones.into_iter().map(azure_zone_ref).collect())
+        } else if zones.is_empty() {
+            println!("No Azure DNS zones found.");
+            Some(Vec::new())
+        } else {
+            println!(">>> Azure DNS Zones:");
+            for zone in &zones {
+                println!("{}  {}", zone.resource_group, zone.name);
+            }
+            Some(zones.into_iter().map(azure_zone_ref).collect())
+        }
+    } else {
+        None
+    };
+
+    if output::is_json() {
+        output::emit(&Report::Azure {
+            auth,
+            subscription,
+            zones,
+        })?;
+    }
+    Ok(0)
+}
+
+fn azure_zone_ref(zone: azure::DnsZone) -> ZoneRef {
+    ZoneRef {
+        id: zone.id,
+        name: zone.name.trim_end_matches('.').to_string(),
     }
 }

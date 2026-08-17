@@ -16,6 +16,9 @@ _gentlsa() {
             ",$1")
                 cmd="gentlsa"
                 ;;
+            gentlsa,azure)
+                cmd="gentlsa__subcmd__azure"
+                ;;
             gentlsa,cloudflare)
                 cmd="gentlsa__subcmd__cloudflare"
                 ;;
@@ -51,6 +54,9 @@ _gentlsa() {
                 ;;
             gentlsa,verify)
                 cmd="gentlsa__subcmd__verify"
+                ;;
+            gentlsa__subcmd__help,azure)
+                cmd="gentlsa__subcmd__help__subcmd__azure"
                 ;;
             gentlsa__subcmd__help,cloudflare)
                 cmd="gentlsa__subcmd__help__subcmd__cloudflare"
@@ -95,8 +101,22 @@ _gentlsa() {
 
     case "${cmd}" in
         gentlsa)
-            opts="-v -h -V --verbose --json --help --version generate list prune rollover verify cloudflare nsupdate route53 google completions file help"
+            opts="-v -h -V --verbose --json --help --version generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        gentlsa__subcmd__azure)
+            opts="-v -h --info --listzones --verbose --json --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -137,7 +157,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__file)
-            opts="-v -h --zone --hostname --port --info --usage --selector --matching --cloudflare --nsupdate --route53 --google --replace --dryrun --verbose --json --help"
+            opts="-v -h --zone --hostname --port --info --usage --selector --matching --cloudflare --nsupdate --route53 --google --azure --replace --dryrun --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -175,7 +195,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__generate)
-            opts="-v -h --hostname --info --usage --selector --matching --cloudflare --nsupdate --route53 --google --replace --dryrun --verbose --json --help"
+            opts="-v -h --hostname --info --usage --selector --matching --cloudflare --nsupdate --route53 --google --azure --replace --dryrun --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -219,8 +239,22 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__help)
-            opts="generate list prune rollover verify cloudflare nsupdate route53 google completions file help"
+            opts="generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        gentlsa__subcmd__help__subcmd__azure)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -401,7 +435,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__list)
-            opts="-v -h --hostname --cloudflare --nsupdate --route53 --google --info --verbose --json --help"
+            opts="-v -h --hostname --cloudflare --nsupdate --route53 --google --azure --info --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -433,7 +467,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__prune)
-            opts="-v -h --hostname --cloudflare --nsupdate --route53 --google --dryrun --verbose --json --help"
+            opts="-v -h --hostname --cloudflare --nsupdate --route53 --google --azure --dryrun --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -451,7 +485,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__rollover)
-            opts="-v -h --hostname --info --cloudflare --nsupdate --route53 --google --reload --ttl --dryrun --resume --schedule --verbose --json --help"
+            opts="-v -h --hostname --info --cloudflare --nsupdate --route53 --google --azure --reload --ttl --dryrun --resume --schedule --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

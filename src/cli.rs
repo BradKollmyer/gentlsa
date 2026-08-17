@@ -77,6 +77,9 @@ pub struct PublisherFlags {
     /// Publish / list / prune via Google Cloud DNS
     #[arg(long, group = "publisher")]
     pub google: bool,
+    /// Publish / list / prune via Azure DNS
+    #[arg(long, group = "publisher")]
+    pub azure: bool,
 }
 
 impl PublisherFlags {
@@ -90,6 +93,8 @@ impl PublisherFlags {
             Some(PublisherKind::Route53)
         } else if self.google {
             Some(PublisherKind::Google)
+        } else if self.azure {
+            Some(PublisherKind::Azure)
         } else {
             None
         }
@@ -262,6 +267,15 @@ pub enum Command {
         #[arg(long)]
         info: bool,
         /// List managed zones in the configured project
+        #[arg(long)]
+        listzones: bool,
+    },
+    /// Azure DNS helpers
+    Azure {
+        /// Print Azure DNS authentication status
+        #[arg(long)]
+        info: bool,
+        /// List DNS zones available to the configured subscription
         #[arg(long)]
         listzones: bool,
     },
@@ -544,6 +558,38 @@ mod tests {
             Command::Google { info, listzones } => {
                 assert!(!info);
                 assert!(listzones);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["gentlsa", "azure", "--info", "--listzones"]).unwrap();
+        match cli.command {
+            Command::Azure { info, listzones } => {
+                assert!(info);
+                assert!(listzones);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_azure_flag() {
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "generate",
+                "example.com",
+                "443",
+                "--azure",
+                "--google"
+            ])
+            .is_err()
+        );
+        let cli = Cli::try_parse_from(["gentlsa", "list", "example.com", "--azure"]).unwrap();
+        match cli.command {
+            Command::List { publisher, .. } => {
+                assert!(publisher.azure);
+                assert!(!publisher.google);
             }
             other => panic!("unexpected {other:?}"),
         }

@@ -33,6 +33,8 @@ pub enum Report {
         #[serde(skip_serializing_if = "Option::is_none")]
         google: Option<ProviderList>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        azure: Option<ProviderList>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
@@ -73,6 +75,14 @@ pub enum Report {
         auth: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         project: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        zones: Option<Vec<ZoneRef>>,
+    },
+    Azure {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subscription: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         zones: Option<Vec<ZoneRef>>,
     },
@@ -122,6 +132,8 @@ pub enum Report {
         route53: Vec<PublishReport>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         google: Vec<PublishReport>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        azure: Vec<PublishReport>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -146,6 +158,8 @@ pub struct GenerateResult {
     pub route53: Option<PublishReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub google: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub azure: Option<PublishReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -219,6 +233,8 @@ pub struct PruneResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub google: Option<PruneReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub azure: Option<PruneReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -265,6 +281,8 @@ pub struct RolloverPublish {
     pub route53: Option<PublishReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub google: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub azure: Option<PublishReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -423,6 +441,7 @@ impl GenerateResult {
             nsupdate: None,
             route53: None,
             google: None,
+            azure: None,
             error: None,
         }
     }
@@ -591,6 +610,7 @@ mod tests {
             nsupdate: Vec::new(),
             route53: Vec::new(),
             google: Vec::new(),
+            azure: Vec::new(),
             error: None,
         };
         let value = serde_json::to_value(&report).unwrap();
@@ -629,6 +649,7 @@ mod tests {
                 nsupdate: None,
                 route53: None,
                 google: None,
+                azure: None,
                 error: None,
             }],
             reload: Some(ReloadReport {

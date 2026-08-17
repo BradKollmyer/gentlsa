@@ -9,6 +9,7 @@
 .Pa /etc/gentlsa/nsupdate.cfg
 .Pa /etc/gentlsa/route53.cfg
 .Pa /etc/gentlsa/google.cfg
+.Pa /etc/gentlsa/azure.cfg
 .Sh DESCRIPTION
 .Xr gentlsa 1
 reads INI-style files for each DNS publisher.
@@ -205,6 +206,69 @@ Path to service-account JSON.
 .It Ev GENTLSA_GOOGLE_PROJECT , Ev GOOGLE_CLOUD_PROJECT , Ev GCLOUD_PROJECT
 GCP project.
 .El
+.Ss Azure DNS
+Azure Resource Manager DNS API
+.Pq TLSA via 2023-07-01-preview .
+.Pa /etc/gentlsa/azure.cfg ,
+then
+.Pa ~/.gentlsa/azure.cfg .
+Section name
+.Sy Azure ,
+.Sy azure ,
+or
+.Sy AzureDNS .
+.Bd -literal -offset indent
+[Azure]
+tenant_id = <directory id>
+client_id = <application id>
+client_secret = <client secret>
+subscription_id = <subscription id>
+resource_group = <resource group>
+ttl = 3600
+.Ed
+.Pp
+.Sy tenant , client-id , app_id , secret ,
+and
+.Sy subscription
+are accepted as aliases.
+.Sy credentials , credentials_file ,
+and
+.Sy key_file
+can point at an Azure service-principal JSON file.
+.Sy resource_group
+is optional; when omitted,
+.Nm
+lists every DNS zone in the subscription.
+Default TTL is 3600.
+Azure only accepts TLSA records on a DNSSEC-signed zone.
+.Pp
+The principal needs
+.Sy Microsoft.Network/dnszones/read
+plus
+.Sy Microsoft.Network/dnszones/TLSA/read ,
+.Sy write ,
+and
+.Sy delete
+.Pq DNS Zone Contributor, or a custom role with those permissions .
+.Bl -tag -width GENTLSA_AZURE_SUBSCRIPTION_ID
+.It Ev AZURE_TENANT_ID , Ev GENTLSA_AZURE_TENANT_ID
+Directory
+.Pq tenant
+ID.
+.It Ev AZURE_CLIENT_ID , Ev GENTLSA_AZURE_CLIENT_ID
+Application
+.Pq client
+ID.
+.It Ev AZURE_CLIENT_SECRET , Ev GENTLSA_AZURE_CLIENT_SECRET
+Client secret.
+.It Ev AZURE_SUBSCRIPTION_ID , Ev GENTLSA_AZURE_SUBSCRIPTION_ID
+Subscription ID.
+.It Ev AZURE_RESOURCE_GROUP , Ev GENTLSA_AZURE_RESOURCE_GROUP
+Resource group
+.Pq optional .
+.It Ev GENTLSA_AZURE_CREDENTIALS , Ev AZURE_CREDENTIALS
+Path to service-principal JSON.
+.El
 .Ss Unsupported
 DigitalOcean DNS is not supported: the official API has no TLSA
 record type and no DNSSEC.
@@ -226,6 +290,10 @@ Per-user Route 53 fallback.
 Google Cloud DNS settings.
 .It Pa ~/.gentlsa/google.cfg
 Per-user Google fallback.
+.It Pa /etc/gentlsa/azure.cfg
+Azure DNS settings.
+.It Pa ~/.gentlsa/azure.cfg
+Per-user Azure fallback.
 .It Pa /var/lib/gentlsa/rollover
 System directory for persisted
 .Cm rollover

@@ -91,6 +91,7 @@ pub enum PublisherKind {
     Nsupdate,
     Route53,
     Google,
+    Azure,
 }
 
 impl PublisherKind {
@@ -100,6 +101,7 @@ impl PublisherKind {
             Self::Nsupdate => "--nsupdate",
             Self::Route53 => "--route53",
             Self::Google => "--google",
+            Self::Azure => "--azure",
         }
     }
 
@@ -109,6 +111,7 @@ impl PublisherKind {
             Self::Nsupdate => "nsupdate",
             Self::Route53 => "Route 53",
             Self::Google => "Google Cloud DNS",
+            Self::Azure => "Azure DNS",
         }
     }
 
@@ -118,6 +121,7 @@ impl PublisherKind {
             Self::Nsupdate => "nsupdate",
             Self::Route53 => "route53",
             Self::Google => "google",
+            Self::Azure => "azure",
         }
     }
 
@@ -127,6 +131,7 @@ impl PublisherKind {
             "nsupdate" | "rfc2136" => Some(Self::Nsupdate),
             "route53" | "r53" => Some(Self::Route53),
             "google" | "gcp" | "clouddns" => Some(Self::Google),
+            "azure" | "azuredns" | "az" => Some(Self::Azure),
             _ => None,
         }
     }
@@ -446,6 +451,7 @@ mod tests {
             PublisherKind::Nsupdate,
             PublisherKind::Route53,
             PublisherKind::Google,
+            PublisherKind::Azure,
         ] {
             assert_eq!(PublisherKind::from_name(kind.name()), Some(kind));
         }

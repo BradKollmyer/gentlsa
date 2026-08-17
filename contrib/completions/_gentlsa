@@ -42,6 +42,7 @@ _arguments "${_arguments_options[@]}" : \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
 '--google[Publish / list / prune via Google Cloud DNS]' \
+'--azure[Publish / list / prune via Azure DNS]' \
 '--replace[With a publisher, overwrite the existing TLSA instead of adding a rollover record]' \
 '--dryrun[With a publisher, print the action but do not write records]' \
 '-v[Print each processing step to stderr]' \
@@ -60,6 +61,7 @@ _arguments "${_arguments_options[@]}" : \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
 '--google[Publish / list / prune via Google Cloud DNS]' \
+'--azure[Publish / list / prune via Azure DNS]' \
 '--info[Compare listed hashes to the live certificate]' \
 '-v[Print each processing step to stderr]' \
 '--verbose[Print each processing step to stderr]' \
@@ -77,6 +79,7 @@ _arguments "${_arguments_options[@]}" : \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
 '--google[Publish / list / prune via Google Cloud DNS]' \
+'--azure[Publish / list / prune via Azure DNS]' \
 '--dryrun[]' \
 '-v[Print each processing step to stderr]' \
 '--verbose[Print each processing step to stderr]' \
@@ -98,6 +101,7 @@ _arguments "${_arguments_options[@]}" : \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
 '--google[Publish / list / prune via Google Cloud DNS]' \
+'--azure[Publish / list / prune via Azure DNS]' \
 '--dryrun[Print the sequence without writing records, sleeping, or running --reload]' \
 '(--resume)--schedule[Write the job and start gentlsa-rollover@JOB (does not block)]' \
 '-v[Print each processing step to stderr]' \
@@ -170,6 +174,17 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(azure)
+_arguments "${_arguments_options[@]}" : \
+'--info[Print Azure DNS authentication status]' \
+'--listzones[List DNS zones available to the configured subscription]' \
+'-v[Print each processing step to stderr]' \
+'--verbose[Print each processing step to stderr]' \
+'--json[Emit a single JSON object on stdout instead of text]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (completions)
 _arguments "${_arguments_options[@]}" : \
 '-v[Print each processing step to stderr]' \
@@ -193,6 +208,7 @@ _arguments "${_arguments_options[@]}" : \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
 '--google[Publish / list / prune via Google Cloud DNS]' \
+'--azure[Publish / list / prune via Azure DNS]' \
 '--replace[]' \
 '--dryrun[]' \
 '-v[Print each processing step to stderr]' \
@@ -251,6 +267,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(azure)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (completions)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -284,11 +304,17 @@ _gentlsa_commands() {
 'nsupdate:RFC 2136 / TSIG helpers' \
 'route53:Amazon Route 53 helpers' \
 'google:Google Cloud DNS helpers' \
+'azure:Azure DNS helpers' \
 'completions:Show TLSA info for a local certificate file Print a shell completion script to stdout' \
 'file:Mutually exclusive publisher flags shared by generate/list/prune/file/rollover' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'gentlsa commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__azure_commands] )) ||
+_gentlsa__subcmd__azure_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa azure commands' commands "$@"
 }
 (( $+functions[_gentlsa__subcmd__cloudflare_commands] )) ||
 _gentlsa__subcmd__cloudflare_commands() {
@@ -327,11 +353,17 @@ _gentlsa__subcmd__help_commands() {
 'nsupdate:RFC 2136 / TSIG helpers' \
 'route53:Amazon Route 53 helpers' \
 'google:Google Cloud DNS helpers' \
+'azure:Azure DNS helpers' \
 'completions:Show TLSA info for a local certificate file Print a shell completion script to stdout' \
 'file:Mutually exclusive publisher flags shared by generate/list/prune/file/rollover' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'gentlsa help commands' commands "$@"
+}
+(( $+functions[_gentlsa__subcmd__help__subcmd__azure_commands] )) ||
+_gentlsa__subcmd__help__subcmd__azure_commands() {
+    local commands; commands=()
+    _describe -t commands 'gentlsa help azure commands' commands "$@"
 }
 (( $+functions[_gentlsa__subcmd__help__subcmd__cloudflare_commands] )) ||
 _gentlsa__subcmd__help__subcmd__cloudflare_commands() {

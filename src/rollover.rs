@@ -13,7 +13,10 @@ use crate::verbose;
 pub fn default_ttl(kind: PublisherKind) -> u32 {
     match kind {
         PublisherKind::Cloudflare => 300,
-        PublisherKind::Nsupdate | PublisherKind::Route53 | PublisherKind::Google => 3600,
+        PublisherKind::Nsupdate
+        | PublisherKind::Route53
+        | PublisherKind::Google
+        | PublisherKind::Azure => 3600,
     }
 }
 
@@ -544,6 +547,7 @@ mod tests {
         assert_eq!(default_ttl(PublisherKind::Nsupdate), 3600);
         assert_eq!(default_ttl(PublisherKind::Route53), 3600);
         assert_eq!(default_ttl(PublisherKind::Google), 3600);
+        assert_eq!(default_ttl(PublisherKind::Azure), 3600);
     }
 
     #[test]

@@ -16,7 +16,7 @@
 .Op Fl -usage Ar n
 .Op Fl -selector Ar n
 .Op Fl -matching Ar n
-.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -replace
 .Op Fl -dryrun
 .Nm
@@ -26,7 +26,7 @@
 .Ar zone
 .Op Ar ports
 .Op Fl -hostname Ar name
-.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -info
 .Nm
 .Op Fl v
@@ -35,7 +35,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
-.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -dryrun
 .Nm
 .Op Fl v
@@ -46,7 +46,7 @@
 .Ar ports
 .Op Fl -hostname Ar name
 .Op Fl -info
-.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -reload Ar cmd
 .Op Fl -ttl Ar seconds
 .Op Fl -schedule
@@ -81,7 +81,7 @@
 .Op Fl -selector Ar n
 .Op Fl -matching Ar n
 .Op Fl -info
-.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google
+.Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -replace
 .Op Fl -dryrun
 .Nm
@@ -105,6 +105,12 @@
 .Op Fl v
 .Op Fl -json
 .Cm google
+.Op Fl -info
+.Op Fl -listzones
+.Nm
+.Op Fl v
+.Op Fl -json
+.Cm azure
 .Op Fl -info
 .Op Fl -listzones
 .Nm
@@ -153,8 +159,9 @@ Publisher flags
 .Fl -cloudflare ,
 .Fl -nsupdate ,
 .Fl -route53 ,
+.Fl -google ,
 and
-.Fl -google
+.Fl -azure
 are mutually exclusive.
 Credentials and file formats are documented in
 .Xr gentlsa 5 .
@@ -201,7 +208,7 @@ print-only for now.
 Short hostname without the zone.
 .It Fl -info
 Print leaf-certificate details before the record.
-.It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google
+.It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google , Fl -azure
 Publish via that provider.
 .It Fl -replace
 With a publisher, overwrite the existing TLSA instead of adding a
@@ -246,7 +253,7 @@ is not available.
 Short hostname without the zone.
 .It Fl -info
 Print certificate details.
-.It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google
+.It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google , Fl -azure
 Publish, wait, and prune via that provider.
 .It Fl -reload Ar cmd
 Command to run after the first wait so the service presents the new
@@ -400,7 +407,7 @@ directory by hand.
 .Bd -literal -offset indent
 $ gentlsa completions fish > ~/.config/fish/completions/gentlsa.fish
 .Ed
-.Ss cloudflare , nsupdate , route53 , google
+.Ss cloudflare , nsupdate , route53 , google , azure
 Publisher helpers.
 .Fl -info
 prints authentication status
@@ -437,6 +444,14 @@ equivalents.
 Path to a Google service-account JSON key.
 .It Ev GENTLSA_GOOGLE_PROJECT , Ev GOOGLE_CLOUD_PROJECT , Ev GCLOUD_PROJECT
 Google Cloud project.
+.It Ev AZURE_TENANT_ID , Ev AZURE_CLIENT_ID , Ev AZURE_CLIENT_SECRET , Ev AZURE_SUBSCRIPTION_ID
+Azure DNS service-principal credentials
+.Pq also Ev GENTLSA_AZURE_*
+equivalents.
+.It Ev AZURE_RESOURCE_GROUP , Ev GENTLSA_AZURE_RESOURCE_GROUP
+Optional Azure resource group used to locate the zone.
+.It Ev GENTLSA_AZURE_CREDENTIALS , Ev AZURE_CREDENTIALS
+Path to an Azure service-principal JSON file.
 .El
 .Sh FILES
 .Bl -tag -width /usr/lib/systemd/system/gentlsa-rollover@.service
@@ -456,6 +471,10 @@ Falls back to
 Google Cloud DNS settings.
 Falls back to
 .Pa ~/.gentlsa/google.cfg .
+.It Pa /etc/gentlsa/azure.cfg
+Azure DNS settings.
+Falls back to
+.Pa ~/.gentlsa/azure.cfg .
 .It Pa /var/lib/gentlsa/rollover
 System rollover job directory
 .Pq created by the Linux packages via tmpfiles.d .
