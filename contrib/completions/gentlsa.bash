@@ -195,7 +195,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__generate)
-            opts="-v -h --hostname --info --usage --selector --matching --cloudflare --nsupdate --route53 --google --azure --replace --dryrun --verbose --json --help"
+            opts="-v -h --hostname --info --starttls --usage --selector --matching --cloudflare --nsupdate --route53 --google --azure --replace --dryrun --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -203,6 +203,10 @@ _gentlsa() {
             case "${prev}" in
                 --hostname)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --starttls)
+                    COMPREPLY=($(compgen -W "smtp imap pop3 xmpp none" -- "${cur}"))
                     return 0
                     ;;
                 --usage)
@@ -435,7 +439,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__list)
-            opts="-v -h --hostname --cloudflare --nsupdate --route53 --google --azure --info --verbose --json --help"
+            opts="-v -h --hostname --starttls --cloudflare --nsupdate --route53 --google --azure --info --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -443,6 +447,10 @@ _gentlsa() {
             case "${prev}" in
                 --hostname)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --starttls)
+                    COMPREPLY=($(compgen -W "smtp imap pop3 xmpp none" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -467,7 +475,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__prune)
-            opts="-v -h --hostname --cloudflare --nsupdate --route53 --google --azure --dryrun --verbose --json --help"
+            opts="-v -h --hostname --starttls --cloudflare --nsupdate --route53 --google --azure --dryrun --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -475,6 +483,10 @@ _gentlsa() {
             case "${prev}" in
                 --hostname)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --starttls)
+                    COMPREPLY=($(compgen -W "smtp imap pop3 xmpp none" -- "${cur}"))
                     return 0
                     ;;
                 *)
@@ -485,7 +497,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__rollover)
-            opts="-v -h --hostname --info --cloudflare --nsupdate --route53 --google --azure --reload --ttl --dryrun --resume --schedule --verbose --json --help"
+            opts="-v -h --hostname --info --starttls --cloudflare --nsupdate --route53 --google --azure --reload --ttl --dryrun --resume --schedule --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -493,6 +505,10 @@ _gentlsa() {
             case "${prev}" in
                 --hostname)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --starttls)
+                    COMPREPLY=($(compgen -W "smtp imap pop3 xmpp none" -- "${cur}"))
                     return 0
                     ;;
                 --reload)
@@ -529,7 +545,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__verify)
-            opts="-v -h --hostname --info --warn --critical --no-expiry-check --no-dnssec-check --verbose --json --help"
+            opts="-v -h --hostname --info --starttls --warn --critical --no-expiry-check --no-dnssec-check --verbose --json --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -537,6 +553,10 @@ _gentlsa() {
             case "${prev}" in
                 --hostname)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --starttls)
+                    COMPREPLY=($(compgen -W "smtp imap pop3 xmpp none" -- "${cur}"))
                     return 0
                     ;;
                 --warn)

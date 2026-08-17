@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `--starttls smtp|imap|pop3|xmpp|none` selects the plaintext upgrade independently of the port on `generate`, `verify`, `list`, `prune`, and `rollover`. When omitted, 25/587 are SMTP, 143 IMAP, 110 POP3, and 5222/5269 XMPP; every other port stays implicit TLS. `--starttls none` forces implicit TLS on a STARTTLS port
 - `gentlsa completions <shell>` prints a bash, zsh, fish, PowerShell, or elvish completion script; the RPM, deb, and FreeBSD packages install the bash, zsh, and fish ones
 - `generate` and `file` accept `--usage`, `--selector`, and `--matching` to emit TLSA parameters other than 3 1 1 (DANE-TA 2 1 1, full-cert selector 0, SHA2-512, exact matching); with usage 0/2, `generate` hashes the first issuer certificate the server presents. Publishing stays 3 1 1-only and other parameters are rejected with a clear error
 - `verify` evaluates every DNS TLSA record with its own parameters against the presented chain (usage 1/3 against the leaf, 0/2 against any presented certificate, selectors 0/1, matching 0/1/2), so zones publishing only DANE-TA `2 1 1` no longer report a false ERROR

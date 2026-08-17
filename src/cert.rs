@@ -17,7 +17,7 @@ use x509_parser::prelude::FromDer;
 use x509_parser::time::ASN1Time;
 
 use crate::dns::TlsaRecord;
-use crate::tlsa::{self, TlsaParams, owner_name};
+use crate::tlsa::{self, StarttlsProto, TlsaParams, owner_name};
 use crate::verbose;
 
 use serde::Serialize;
@@ -233,18 +233,24 @@ fn tlsa_association_data(der: &[u8], selector: u8, matching: u8) -> Result<Strin
     })
 }
 
-pub fn fetch_live(host: &str, port: u16) -> Result<Certificate> {
-    if tlsa::uses_starttls(port) {
-        verbose::step(format_args!("connecting to {host}:{port} (SMTP STARTTLS)"));
-        let stream = smtp_starttls(host, port)
-            .with_context(|| format!("Exception: Connection error: STARTTLS {host}:{port}"))?;
-        return tls_peer_cert(stream, host)
-            .with_context(|| format!("Exception: Connection error: TLS {host}:{port}"));
-    }
-
-    verbose::step(format_args!("connecting to {host}:{port} (implicit TLS)"));
-    let stream = tcp_connect(host, port)
-        .with_context(|| format!("Exception: Connection error: connect {host}:{port}"))?;
+pub fn fetch_live(host: &str, port: u16, starttls: Option<StarttlsProto>) -> Result<Certificate> {
+    let proto = StarttlsProto::resolve(port, starttls);
+    verbose::step(format_args!(
+        "connecting to {host}:{port} ({})",
+        proto.label()
+    ));
+    let stream = match proto {
+        StarttlsProto::None => tcp_connect(host, port)
+            .with_context(|| format!("Exception: Connection error: connect {host}:{port}"))?,
+        StarttlsProto::Smtp => smtp_starttls(host, port)
+            .with_context(|| format!("Exception: Connection error: SMTP STARTTLS {host}:{port}"))?,
+        StarttlsProto::Imap => imap_starttls(host, port)
+            .with_context(|| format!("Exception: Connection error: IMAP STARTTLS {host}:{port}"))?,
+        StarttlsProto::Pop3 => pop3_starttls(host, port)
+            .with_context(|| format!("Exception: Connection error: POP3 STLS {host}:{port}"))?,
+        StarttlsProto::Xmpp => xmpp_starttls(host, port)
+            .with_context(|| format!("Exception: Connection error: XMPP STARTTLS {host}:{port}"))?,
+    };
     tls_peer_cert(stream, host)
         .with_context(|| format!("Exception: Connection error: TLS {host}:{port}"))
 }
@@ -267,36 +273,41 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
 
 fn smtp_starttls(host: &str, port: u16) -> Result<TcpStream> {
     let mut stream = tcp_connect(host, port)?;
-    let (code, text) = smtp_read_response(&mut stream)?;
+    smtp_negotiate(&mut stream)?;
+    Ok(stream)
+}
+
+fn smtp_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
+    let (code, text) = smtp_read_response(stream)?;
     if code != 220 {
         bail!("SMTP banner rejected ({code}): {text}");
     }
     verbose::step(format_args!("SMTP banner {code}"));
 
-    let (code, text) = smtp_command(&mut stream, "EHLO gentlsa")?;
+    let (code, text) = smtp_command(stream, "EHLO gentlsa")?;
     if code != 250 {
         bail!("EHLO rejected ({code}): {text}");
     }
     verbose::step("SMTP EHLO accepted");
 
-    let (code, text) = smtp_command(&mut stream, "STARTTLS")?;
+    let (code, text) = smtp_command(stream, "STARTTLS")?;
     if code != 220 {
         bail!("STARTTLS rejected ({code}): {text}");
     }
     verbose::step("SMTP STARTTLS accepted");
-    Ok(stream)
+    Ok(())
 }
 
-fn smtp_command(stream: &mut TcpStream, command: &str) -> Result<(u16, String)> {
+fn smtp_command(stream: &mut impl ReadWrite, command: &str) -> Result<(u16, String)> {
     stream.write_all(format!("{command}\r\n").as_bytes())?;
     stream.flush()?;
     smtp_read_response(stream)
 }
 
-fn smtp_read_response(stream: &mut TcpStream) -> Result<(u16, String)> {
+fn smtp_read_response(stream: &mut impl Read) -> Result<(u16, String)> {
     let mut messages = Vec::new();
     let code = loop {
-        let line = read_crlf_line(stream)?;
+        let line = read_crlf_line(stream, "SMTP")?;
         if line.len() < 3 {
             bail!("short SMTP response: {line:?}");
         }
@@ -314,13 +325,157 @@ fn smtp_read_response(stream: &mut TcpStream) -> Result<(u16, String)> {
     Ok((code, messages.join("\n")))
 }
 
-fn read_crlf_line(stream: &mut TcpStream) -> Result<String> {
+fn imap_starttls(host: &str, port: u16) -> Result<TcpStream> {
+    let mut stream = tcp_connect(host, port)?;
+    imap_negotiate(&mut stream)?;
+    Ok(stream)
+}
+
+fn imap_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
+    let greeting = read_crlf_line(stream, "IMAP")?;
+    if !greeting.starts_with("* ") {
+        bail!("IMAP greeting rejected: {greeting}");
+    }
+    let greeting_upper = greeting.to_ascii_uppercase();
+    if greeting_upper.contains(" BYE") {
+        bail!("IMAP greeting is BYE: {greeting}");
+    }
+    verbose::step("IMAP greeting");
+
+    stream.write_all(b"a001 STARTTLS\r\n")?;
+    stream.flush()?;
+    loop {
+        let line = read_crlf_line(stream, "IMAP")?;
+        let upper = line.to_ascii_uppercase();
+        if let Some(rest) = upper.strip_prefix("A001 ") {
+            if rest.starts_with("OK") {
+                verbose::step("IMAP STARTTLS accepted");
+                return Ok(());
+            }
+            bail!("IMAP STARTTLS rejected: {line}");
+        }
+        if upper.starts_with("* BYE") {
+            bail!("IMAP closed: {line}");
+        }
+    }
+}
+
+fn pop3_starttls(host: &str, port: u16) -> Result<TcpStream> {
+    let mut stream = tcp_connect(host, port)?;
+    pop3_negotiate(&mut stream)?;
+    Ok(stream)
+}
+
+fn pop3_negotiate(stream: &mut impl ReadWrite) -> Result<()> {
+    let greeting = read_crlf_line(stream, "POP3")?;
+    if !greeting.starts_with("+OK") {
+        bail!("POP3 greeting rejected: {greeting}");
+    }
+    verbose::step("POP3 greeting");
+
+    stream.write_all(b"STLS\r\n")?;
+    stream.flush()?;
+    let resp = read_crlf_line(stream, "POP3")?;
+    if !resp.starts_with("+OK") {
+        bail!("POP3 STLS rejected: {resp}");
+    }
+    verbose::step("POP3 STLS accepted");
+    Ok(())
+}
+
+fn xmpp_starttls(host: &str, port: u16) -> Result<TcpStream> {
+    let mut stream = tcp_connect(host, port)?;
+    xmpp_negotiate(&mut stream, host, port)?;
+    Ok(stream)
+}
+
+fn xmpp_negotiate(stream: &mut impl ReadWrite, host: &str, port: u16) -> Result<()> {
+    let xmlns = StarttlsProto::Xmpp.xmpp_stream_ns(port);
+    let open = format!(
+        "<?xml version='1.0'?><stream:stream xmlns='{xmlns}' \
+         xmlns:stream='http://etherx.jabber.org/streams' to='{}' version='1.0'>",
+        xml_attr(host)
+    );
+    stream.write_all(open.as_bytes())?;
+    stream.flush()?;
+
+    let features = read_until_markers(
+        stream,
+        &["</stream:features>", "<stream:features/>"],
+        "XMPP",
+    )?;
+    let features_l = features.to_ascii_lowercase();
+    if !features_l.contains("starttls") && !features_l.contains("urn:ietf:params:xml:ns:xmpp-tls") {
+        bail!("XMPP server did not advertise STARTTLS");
+    }
+    verbose::step("XMPP stream features advertised STARTTLS");
+
+    stream.write_all(b"<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>")?;
+    stream.flush()?;
+    let reply = xmpp_read_element(stream, &["proceed", "failure"])?;
+    if reply.to_ascii_lowercase().contains("<failure") {
+        bail!("XMPP STARTTLS rejected");
+    }
+    verbose::step("XMPP STARTTLS accepted");
+    Ok(())
+}
+
+/// Read a complete XML start-or-empty element named in `names` (e.g. proceed).
+/// Stops after the closing `>` so leftover bytes are not fed to the TLS handshake.
+fn xmpp_read_element(stream: &mut impl Read, names: &[&str]) -> Result<String> {
+    let starts: Vec<String> = names.iter().map(|name| format!("<{name}")).collect();
+    let start_refs: Vec<&str> = starts.iter().map(String::as_str).collect();
+    let mut buf = read_until_markers(stream, &start_refs, "XMPP")?;
+    if !buf.contains('>') {
+        buf.push_str(&read_until_markers(stream, &[">"], "XMPP")?);
+    }
+    if xml_start_is_empty(&buf) {
+        return Ok(buf);
+    }
+    let lower = buf.to_ascii_lowercase();
+    let name = names
+        .iter()
+        .find(|name| lower.contains(&format!("<{name}")))
+        .copied()
+        .unwrap_or(names[0]);
+    let close = format!("</{name}>");
+    if !lower.contains(&close) {
+        buf.push_str(&read_until_markers(stream, &[&close], "XMPP")?);
+    }
+    Ok(buf)
+}
+
+fn xml_start_is_empty(buf: &str) -> bool {
+    buf.trim_end()
+        .strip_suffix('>')
+        .is_some_and(|rest| rest.trim_end().ends_with('/'))
+}
+
+fn xml_attr(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\'' => out.push_str("&apos;"),
+            '"' => out.push_str("&quot;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+trait ReadWrite: Read + Write {}
+impl<T: Read + Write> ReadWrite for T {}
+
+fn read_crlf_line(stream: &mut impl Read, proto: &str) -> Result<String> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
         let n = stream.read(&mut byte)?;
         if n == 0 {
-            bail!("SMTP connection closed");
+            bail!("{proto} connection closed");
         }
         if byte[0] == b'\n' {
             break;
@@ -329,10 +484,35 @@ fn read_crlf_line(stream: &mut TcpStream) -> Result<String> {
             line.push(byte[0]);
         }
         if line.len() > 8192 {
-            bail!("SMTP line too long");
+            bail!("{proto} line too long");
         }
     }
-    String::from_utf8(line).context("SMTP response was not valid UTF-8")
+    String::from_utf8(line).with_context(|| format!("{proto} response was not valid UTF-8"))
+}
+
+fn read_until_markers(stream: &mut impl Read, markers: &[&str], proto: &str) -> Result<String> {
+    let markers: Vec<Vec<u8>> = markers
+        .iter()
+        .map(|m| m.as_bytes().to_ascii_lowercase())
+        .collect();
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = stream.read(&mut byte)?;
+        if n == 0 {
+            bail!("{proto} connection closed");
+        }
+        buf.push(byte[0]);
+        if buf.len() > 65_536 {
+            bail!("{proto} response too long");
+        }
+        if markers.iter().any(|marker| {
+            buf.len() >= marker.len()
+                && buf[buf.len() - marker.len()..].eq_ignore_ascii_case(marker)
+        }) {
+            return Ok(String::from_utf8_lossy(&buf).into_owned());
+        }
+    }
 }
 
 fn tls_peer_cert(mut stream: TcpStream, server_name: &str) -> Result<Certificate> {
@@ -569,6 +749,157 @@ mod tests {
             parsed.issuer().to_string(),
             "C=US, O=GenTLSA Test, CN=test.example"
         );
+    }
+
+    struct Scripted {
+        reads: std::io::Cursor<Vec<u8>>,
+        writes: Vec<u8>,
+    }
+
+    impl Scripted {
+        fn new(server: &str) -> Self {
+            Self {
+                reads: std::io::Cursor::new(server.as_bytes().to_vec()),
+                writes: Vec::new(),
+            }
+        }
+
+        fn written(&self) -> String {
+            String::from_utf8_lossy(&self.writes).into_owned()
+        }
+    }
+
+    impl Read for Scripted {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads.read(buf)
+        }
+    }
+
+    impl Write for Scripted {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn smtp_negotiate_ehlo_and_starttls() {
+        let mut stream =
+            Scripted::new("220 mx.example ESMTP\r\n250-hello\r\n250 STARTTLS\r\n220 Go ahead\r\n");
+        smtp_negotiate(&mut stream).unwrap();
+        let written = stream.written();
+        assert!(written.contains("EHLO gentlsa"));
+        assert!(written.contains("STARTTLS"));
+    }
+
+    #[test]
+    fn smtp_negotiate_rejects_starttls() {
+        let mut stream =
+            Scripted::new("220 mx.example ESMTP\r\n250 ok\r\n454 TLS not available\r\n");
+        let err = smtp_negotiate(&mut stream).unwrap_err();
+        assert!(err.to_string().contains("STARTTLS rejected"));
+    }
+
+    #[test]
+    fn imap_negotiate_starttls() {
+        let mut stream = Scripted::new(
+            "* OK IMAP4rev1 ready\r\n* CAPABILITY IMAP4rev1 STARTTLS\r\na001 OK Begin TLS\r\n",
+        );
+        imap_negotiate(&mut stream).unwrap();
+        assert_eq!(stream.written(), "a001 STARTTLS\r\n");
+    }
+
+    #[test]
+    fn imap_negotiate_rejects_starttls() {
+        let mut stream = Scripted::new("* OK ready\r\na001 BAD no TLS\r\n");
+        let err = imap_negotiate(&mut stream).unwrap_err();
+        assert!(err.to_string().contains("IMAP STARTTLS rejected"));
+    }
+
+    #[test]
+    fn pop3_negotiate_stls() {
+        let mut stream = Scripted::new("+OK POP3 ready\r\n+OK Begin TLS\r\n");
+        pop3_negotiate(&mut stream).unwrap();
+        assert_eq!(stream.written(), "STLS\r\n");
+    }
+
+    #[test]
+    fn pop3_negotiate_rejects_stls() {
+        let mut stream = Scripted::new("+OK ready\r\n-ERR not supported\r\n");
+        let err = pop3_negotiate(&mut stream).unwrap_err();
+        assert!(err.to_string().contains("POP3 STLS rejected"));
+    }
+
+    #[test]
+    fn xmpp_negotiate_client_stream() {
+        let mut stream = Scripted::new(
+            "<?xml version='1.0'?><stream:stream xmlns:stream='http://etherx.jabber.org/streams' \
+             xmlns='jabber:client' version='1.0'>\
+             <stream:features><starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'>\
+             <required/></starttls></stream:features>\
+             <proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>",
+        );
+        xmpp_negotiate(&mut stream, "xmpp.example.com", 5222).unwrap();
+        let written = stream.written();
+        assert!(written.contains("xmlns='jabber:client'"));
+        assert!(written.contains("to='xmpp.example.com'"));
+        assert!(written.contains("<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>"));
+    }
+
+    #[test]
+    fn xmpp_negotiate_server_namespace_on_5269() {
+        let mut stream = Scripted::new(
+            "<stream:stream xmlns:stream='http://etherx.jabber.org/streams' \
+             xmlns='jabber:server' version='1.0'>\
+             <stream:features><starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>\
+             </stream:features><proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>",
+        );
+        xmpp_negotiate(&mut stream, "example.com", 5269).unwrap();
+        assert!(stream.written().contains("xmlns='jabber:server'"));
+    }
+
+    #[test]
+    fn xmpp_negotiate_consumes_full_proceed() {
+        let mut stream = Scripted::new(
+            "<stream:stream xmlns:stream='http://etherx.jabber.org/streams'>\
+             <stream:features><starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>\
+             </stream:features><proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>TLSBYTES",
+        );
+        xmpp_negotiate(&mut stream, "example.com", 5222).unwrap();
+        let mut rest = String::new();
+        stream.read_to_string(&mut rest).unwrap();
+        assert_eq!(rest, "TLSBYTES");
+    }
+
+    #[test]
+    fn xmpp_negotiate_paired_proceed() {
+        let mut stream = Scripted::new(
+            "<stream:stream><stream:features><starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>\
+             </stream:features><proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'></proceed>TLSBYTES",
+        );
+        xmpp_negotiate(&mut stream, "example.com", 5222).unwrap();
+        let mut rest = String::new();
+        stream.read_to_string(&mut rest).unwrap();
+        assert_eq!(rest, "TLSBYTES");
+    }
+
+    #[test]
+    fn xmpp_negotiate_requires_starttls_feature() {
+        let mut stream = Scripted::new(
+            "<stream:stream><stream:features><mechanisms xmlns='urn:ietf:params:xml:ns:xmpp-sasl'/>\
+             </stream:features>",
+        );
+        let err = xmpp_negotiate(&mut stream, "example.com", 5222).unwrap_err();
+        assert!(err.to_string().contains("did not advertise STARTTLS"));
+    }
+
+    #[test]
+    fn xml_attr_escapes() {
+        assert_eq!(xml_attr("a&b<c>'d\""), "a&amp;b&lt;c&gt;&apos;d&quot;");
     }
 
     #[test]

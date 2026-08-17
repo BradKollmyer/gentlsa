@@ -62,6 +62,21 @@ impl TlsaParamFlags {
     }
 }
 
+/// STARTTLS protocol override shared by commands that fetch a live certificate.
+#[derive(Debug, Clone, Copy, Default, clap::Args)]
+pub struct StarttlsFlags {
+    /// STARTTLS protocol, or none for implicit TLS. Default: infer from the port
+    /// (25/587 smtp, 143 imap, 110 pop3, 5222/5269 xmpp)
+    #[arg(long, value_name = "PROTO", value_enum)]
+    pub starttls: Option<crate::tlsa::StarttlsProto>,
+}
+
+impl StarttlsFlags {
+    pub fn proto(self) -> Option<crate::tlsa::StarttlsProto> {
+        self.starttls
+    }
+}
+
 /// Mutually exclusive publisher flags shared by generate/list/prune/file/rollover.
 #[derive(Debug, Clone, Copy, Default, clap::Args)]
 pub struct PublisherFlags {
@@ -137,6 +152,8 @@ pub enum Command {
         #[arg(long)]
         info: bool,
         #[command(flatten)]
+        starttls: StarttlsFlags,
+        #[command(flatten)]
         params: TlsaParamFlags,
         #[command(flatten)]
         publisher: PublisherFlags,
@@ -156,6 +173,8 @@ pub enum Command {
         #[arg(long)]
         hostname: Option<String>,
         #[command(flatten)]
+        starttls: StarttlsFlags,
+        #[command(flatten)]
         publisher: PublisherFlags,
         /// Compare listed hashes to the live certificate
         #[arg(long)]
@@ -169,6 +188,8 @@ pub enum Command {
         ports: Ports,
         #[arg(long)]
         hostname: Option<String>,
+        #[command(flatten)]
+        starttls: StarttlsFlags,
         #[command(flatten)]
         publisher: PublisherFlags,
         #[arg(long)]
@@ -190,6 +211,8 @@ pub enum Command {
         /// Print certificate details
         #[arg(long)]
         info: bool,
+        #[command(flatten)]
+        starttls: StarttlsFlags,
         #[command(flatten)]
         publisher: PublisherFlags,
         /// Command to run after 2× the TLSA TTL so the service presents the new certificate
@@ -224,6 +247,8 @@ pub enum Command {
         hostname: Option<String>,
         #[arg(long)]
         info: bool,
+        #[command(flatten)]
+        starttls: StarttlsFlags,
         /// Warn when the live certificate expires in this many days or fewer
         #[arg(long, default_value_t = 14, value_name = "DAYS")]
         warn: u32,
@@ -392,9 +417,79 @@ mod tests {
         assert!(Cli::try_parse_from(["gentlsa", "generate", "example.com"]).is_err());
         let cli = Cli::try_parse_from(["gentlsa", "generate", "example.com", "25,465"]).unwrap();
         match cli.command {
-            Command::Generate { ports, .. } => assert_eq!(ports.0, vec![25, 465]),
+            Command::Generate {
+                ports, starttls, ..
+            } => {
+                assert_eq!(ports.0, vec![25, 465]);
+                assert!(starttls.proto().is_none());
+            }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn clap_starttls_flag() {
+        use crate::tlsa::StarttlsProto;
+
+        let cli = Cli::try_parse_from([
+            "gentlsa",
+            "generate",
+            "example.com",
+            "2525",
+            "--starttls",
+            "smtp",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Generate { starttls, .. } => {
+                assert_eq!(starttls.proto(), Some(StarttlsProto::Smtp));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "gentlsa",
+            "verify",
+            "example.com",
+            "25",
+            "--starttls",
+            "none",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Verify { starttls, .. } => {
+                assert_eq!(starttls.proto(), Some(StarttlsProto::None));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "gentlsa",
+            "list",
+            "example.com",
+            "143",
+            "--starttls",
+            "imap",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::List { starttls, .. } => {
+                assert_eq!(starttls.proto(), Some(StarttlsProto::Imap));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "generate",
+                "example.com",
+                "25",
+                "--starttls",
+                "ftp"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -638,6 +733,7 @@ mod tests {
                 info,
                 resume,
                 schedule,
+                starttls,
             } => {
                 assert_eq!(certfile, Some(PathBuf::from("cert.pem")));
                 assert_eq!(zone.as_deref(), Some("example.com"));
@@ -650,6 +746,7 @@ mod tests {
                 assert!(!info);
                 assert!(resume.is_none());
                 assert!(!schedule);
+                assert!(starttls.proto().is_none());
             }
             other => panic!("unexpected {other:?}"),
         }

@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::publish::PublisherKind;
+use crate::tlsa::StarttlsProto;
 use crate::verbose;
 
 /// Cloudflare "auto" TTL is 300s; other publishers default to 3600.
@@ -71,6 +72,7 @@ pub fn next_steps(
     hostname: Option<&str>,
     kind: PublisherKind,
     ttl: u32,
+    starttls: Option<StarttlsProto>,
 ) -> String {
     let ports = ports
         .iter()
@@ -81,6 +83,10 @@ pub fn next_steps(
     if let Some(host) = hostname.filter(|host| !host.is_empty()) {
         prune.push_str(" --hostname ");
         prune.push_str(host);
+    }
+    if let Some(proto) = starttls {
+        prune.push_str(" --starttls ");
+        prune.push_str(proto.as_str());
     }
     let wait = wait_seconds(ttl);
     format!(
@@ -171,6 +177,8 @@ pub struct Job {
     pub ports: Vec<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starttls: Option<StarttlsProto>,
     pub publisher: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<String>,
@@ -198,6 +206,7 @@ impl Job {
         reload: Option<String>,
         ttl: u32,
         certificate: String,
+        starttls: Option<StarttlsProto>,
     ) -> Self {
         let hostname = hostname.filter(|host| !host.is_empty()).map(str::to_string);
         Self {
@@ -207,6 +216,7 @@ impl Job {
             zone,
             ports: ports.to_vec(),
             hostname,
+            starttls,
             publisher: kind.name().into(),
             reload,
             ttl,
@@ -575,10 +585,18 @@ mod tests {
 
     #[test]
     fn next_steps_includes_prune_command() {
-        let msg = next_steps("example.com", &[443], None, PublisherKind::Cloudflare, 300);
+        let msg = next_steps(
+            "example.com",
+            &[443],
+            None,
+            PublisherKind::Cloudflare,
+            300,
+            None,
+        );
         assert!(msg.contains("wait 600s (2× TLSA TTL)"));
         assert!(msg.contains("gentlsa prune example.com 443 --cloudflare"));
         assert!(!msg.contains("--hostname"));
+        assert!(!msg.contains("--starttls"));
 
         let msg = next_steps(
             "example.com",
@@ -586,8 +604,13 @@ mod tests {
             Some("mx"),
             PublisherKind::Nsupdate,
             3600,
+            Some(StarttlsProto::Smtp),
         );
-        assert!(msg.contains("gentlsa prune example.com 25,465 --nsupdate --hostname mx"));
+        assert!(
+            msg.contains(
+                "gentlsa prune example.com 25,465 --nsupdate --hostname mx --starttls smtp"
+            )
+        );
     }
 
     #[test]
@@ -653,6 +676,7 @@ mod tests {
             Some("systemctl reload nginx".into()),
             300,
             "abc".into(),
+            None,
         );
         job.mark_published(1_000);
         assert_eq!(job.phase, JobPhase::WaitBeforeReload);
@@ -693,17 +717,43 @@ mod tests {
             Some("true".into()),
             300,
             "abc".into(),
+            Some(StarttlsProto::Imap),
         );
         save_job_in(&dir, &job).unwrap();
         let loaded = load_job_in(&dir, &job.id).unwrap().unwrap();
         assert_eq!(loaded.certificate, "abc");
         assert_eq!(loaded.publisher, "cloudflare");
+        assert_eq!(loaded.starttls, Some(StarttlsProto::Imap));
 
         let found = load_jobs_in(&dir, Some("example.com")).unwrap();
         assert_eq!(found.len(), 1);
         assert!(load_jobs_in(&dir, Some("other.org")).is_err());
         remove_job_in(&dir, &job.id).unwrap();
         assert!(load_job_in(&dir, &job.id).unwrap().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn job_without_starttls_field_still_loads() {
+        let dir = test_dir();
+        let path = dir.join("example.com_443.json");
+        fs::write(
+            &path,
+            r#"{
+              "version": 1,
+              "id": "example.com_443",
+              "certfile": "cert.pem",
+              "zone": "example.com",
+              "ports": [443],
+              "publisher": "cloudflare",
+              "ttl": 300,
+              "certificate": "abc",
+              "phase": "publish"
+            }"#,
+        )
+        .unwrap();
+        let job = load_job_in(&dir, "example.com_443").unwrap().unwrap();
+        assert!(job.starttls.is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

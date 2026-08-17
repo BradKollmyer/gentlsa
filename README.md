@@ -87,12 +87,12 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google|--azure] [--replace] [--dryrun]
-gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google|--azure] [--info]
-gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google|--azure] [--dryrun]
-gentlsa [-v|--verbose] [--json] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate|--route53|--google|--azure] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
+gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google|--azure] [--replace] [--dryrun]
+gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--info]
+gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--dryrun]
+gentlsa [-v|--verbose] [--json] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
 gentlsa [-v|--verbose] [--json] rollover --resume [JOB]
-gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--warn <DAYS>] [--critical <DAYS>] [--no-expiry-check] [--no-dnssec-check]
+gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--warn <DAYS>] [--critical <DAYS>] [--no-expiry-check] [--no-dnssec-check]
 gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] nsupdate [--info]
 gentlsa [-v|--verbose] [--json] route53 [--info] [--listzones]
@@ -102,7 +102,7 @@ gentlsa completions <bash|zsh|fish|powershell|elvish>
 gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--usage <N>] [--selector <N>] [--matching <N>] [--cloudflare|--nsupdate|--route53|--google|--azure]
 ```
 
-`--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
+`--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). `--starttls smtp|imap|pop3|xmpp|none` selects the plaintext upgrade before TLS. When omitted, ports **25** and **587** use SMTP, **143** IMAP, **110** POP3, and **5222**/**5269** XMPP. Every other port, including 443, 465, 993, and 995, uses implicit TLS. `--starttls none` forces implicit TLS on a STARTTLS port; `--starttls smtp` (or `imap`/`pop3`/`xmpp`) forces that protocol on a nonstandard port. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
 
 `-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, publisher APIs). Regular output stays on stdout, so `verify` remains Nagios-safe.
 
@@ -167,6 +167,14 @@ SMTP STARTTLS example (connects to `smtp.gmail.com:587`):
 
 ```
 $ gentlsa generate gmail.com 587 --hostname smtp --info
+```
+
+IMAP on the well-known port, or SMTP on a nonstandard port:
+
+```
+$ gentlsa generate example.com 143 --hostname imap
+$ gentlsa generate example.com 2525 --hostname mx --starttls smtp
+$ gentlsa generate example.com 25 --starttls none
 ```
 
 `--usage` (0-3, default 3 DANE-EE), `--selector` (0 full certificate, 1 SubjectPublicKeyInfo; default 1), and `--matching` (0 exact, 1 SHA2-256, 2 SHA2-512; default 1) select other TLSA parameters. With usage 0 or 2 (trust anchor), `generate` hashes the first issuer certificate the server presents instead of the leaf (a self-signed leaf is its own anchor):

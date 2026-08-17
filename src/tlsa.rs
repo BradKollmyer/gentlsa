@@ -126,8 +126,65 @@ pub fn port_from_owner(name: &str) -> Option<u16> {
     port.parse().ok()
 }
 
-pub fn uses_starttls(port: u16) -> bool {
-    matches!(port, 25 | 587)
+/// How to reach the certificate: implicit TLS, or a STARTTLS upgrade.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum StarttlsProto {
+    Smtp,
+    Imap,
+    Pop3,
+    Xmpp,
+    /// Implicit TLS; skip STARTTLS even on ports that default to it.
+    None,
+}
+
+impl StarttlsProto {
+    /// Well-known ports when `--starttls` is omitted.
+    pub fn for_port(port: u16) -> Self {
+        match port {
+            25 | 587 => Self::Smtp,
+            143 => Self::Imap,
+            110 => Self::Pop3,
+            5222 | 5269 => Self::Xmpp,
+            _ => Self::None,
+        }
+    }
+
+    /// Explicit `--starttls` wins; otherwise infer from the port.
+    pub fn resolve(port: u16, requested: Option<Self>) -> Self {
+        requested.unwrap_or_else(|| Self::for_port(port))
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Smtp => "smtp",
+            Self::Imap => "imap",
+            Self::Pop3 => "pop3",
+            Self::Xmpp => "xmpp",
+            Self::None => "none",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Smtp => "SMTP STARTTLS",
+            Self::Imap => "IMAP STARTTLS",
+            Self::Pop3 => "POP3 STLS",
+            Self::Xmpp => "XMPP STARTTLS",
+            Self::None => "implicit TLS",
+        }
+    }
+
+    /// XMPP server-to-server (RFC 6120) uses a different stream namespace.
+    pub fn xmpp_stream_ns(self, port: u16) -> &'static str {
+        if port == 5269 {
+            "jabber:server"
+        } else {
+            "jabber:client"
+        }
+    }
 }
 
 pub fn record_line_with(owner: &str, params: TlsaParams, hash: &str) -> String {
@@ -186,10 +243,33 @@ mod tests {
 
     #[test]
     fn starttls_ports() {
-        assert!(uses_starttls(25));
-        assert!(uses_starttls(587));
-        assert!(!uses_starttls(443));
-        assert!(!uses_starttls(465));
+        assert_eq!(StarttlsProto::for_port(25), StarttlsProto::Smtp);
+        assert_eq!(StarttlsProto::for_port(587), StarttlsProto::Smtp);
+        assert_eq!(StarttlsProto::for_port(143), StarttlsProto::Imap);
+        assert_eq!(StarttlsProto::for_port(110), StarttlsProto::Pop3);
+        assert_eq!(StarttlsProto::for_port(5222), StarttlsProto::Xmpp);
+        assert_eq!(StarttlsProto::for_port(5269), StarttlsProto::Xmpp);
+        assert_eq!(StarttlsProto::for_port(443), StarttlsProto::None);
+        assert_eq!(StarttlsProto::for_port(465), StarttlsProto::None);
+        assert_eq!(StarttlsProto::for_port(993), StarttlsProto::None);
+        assert_eq!(StarttlsProto::for_port(995), StarttlsProto::None);
+    }
+
+    #[test]
+    fn starttls_resolve_override() {
+        assert_eq!(
+            StarttlsProto::resolve(443, Some(StarttlsProto::Smtp)),
+            StarttlsProto::Smtp
+        );
+        assert_eq!(
+            StarttlsProto::resolve(25, Some(StarttlsProto::None)),
+            StarttlsProto::None
+        );
+        assert_eq!(StarttlsProto::resolve(2525, None), StarttlsProto::None);
+        assert_eq!(StarttlsProto::resolve(143, None), StarttlsProto::Imap);
+        assert_eq!(StarttlsProto::Xmpp.xmpp_stream_ns(5269), "jabber:server");
+        assert_eq!(StarttlsProto::Xmpp.xmpp_stream_ns(5222), "jabber:client");
+        assert_eq!(StarttlsProto::Xmpp.xmpp_stream_ns(1234), "jabber:client");
     }
 
     #[test]

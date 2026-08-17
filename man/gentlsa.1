@@ -12,6 +12,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -starttls Ar proto
 .Op Fl -info
 .Op Fl -usage Ar n
 .Op Fl -selector Ar n
@@ -26,6 +27,7 @@
 .Ar zone
 .Op Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -starttls Ar proto
 .Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -info
 .Nm
@@ -35,6 +37,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -starttls Ar proto
 .Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -dryrun
 .Nm
@@ -45,6 +48,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -starttls Ar proto
 .Op Fl -info
 .Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -reload Ar cmd
@@ -64,6 +68,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -starttls Ar proto
 .Op Fl -info
 .Op Fl -warn Ar days
 .Op Fl -critical Ar days
@@ -146,12 +151,32 @@ becomes
 The owner name looks like
 .Dl _<port>._tcp[.<hostname>].<zone>
 .Pp
-Ports
+.Fl -starttls
+selects the plaintext upgrade before TLS:
+.Sy smtp , imap , pop3 , xmpp ,
+or
+.Sy none
+for implicit TLS.
+When omitted, ports
 .Sy 25
 and
 .Sy 587
-use SMTP STARTTLS.
-Every other port, including 443 and 465, uses implicit TLS.
+use SMTP,
+.Sy 143
+IMAP,
+.Sy 110
+POP3, and
+.Sy 5222
+and
+.Sy 5269
+XMPP
+.Pq 5269 uses the server-to-server stream namespace .
+Every other port, including 443, 465, 993, and 995, uses implicit TLS.
+.Fl -starttls Sy none
+forces implicit TLS on a STARTTLS port;
+.Fl -starttls Sy smtp
+.Pq or imap / pop3 / xmpp
+forces that protocol on a nonstandard port.
 Certificate verification is disabled on purpose so an expired or
 otherwise untrusted leaf can still be hashed.
 .Pp
@@ -206,6 +231,12 @@ print-only for now.
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
 Short hostname without the zone.
+.It Fl -starttls Ar proto
+STARTTLS protocol
+.Pq Sy smtp , imap , pop3 , xmpp ,
+or
+.Sy none .
+Default is inferred from the port.
 .It Fl -info
 Print leaf-certificate details before the record.
 .It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google , Fl -azure
@@ -223,6 +254,10 @@ Publisher flags also print what that provider has.
 queries the configured primary, or AXFR when
 .Ar ports
 is omitted.
+.Fl -starttls
+is used when
+.Fl -info
+fetches the live certificate.
 .Fl -info
 fetches the live certificate and marks each
 .Sy 3 1 1
@@ -236,6 +271,9 @@ to include every port.
 List, and with a publisher delete, TLSA records that no longer match
 the live certificate.
 Run this after a rollover has been live longer than the DNS TTL.
+.Fl -starttls
+controls how the live certificate is fetched, as in
+.Cm generate .
 .Fl -dryrun
 shows what would be removed without writing.
 .Ss rollover
@@ -251,6 +289,12 @@ is not available.
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
 Short hostname without the zone.
+.It Fl -starttls Ar proto
+STARTTLS protocol used when checking whether the new certificate is
+already live and when pruning.
+Persisted on the job so
+.Fl -resume
+uses the same protocol.
 .It Fl -info
 Print certificate details.
 .It Fl -cloudflare , Fl -nsupdate , Fl -route53 , Fl -google , Fl -azure
@@ -359,6 +403,9 @@ unauthenticated; point the system resolver at a full resolver or pass
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
 Short hostname without the zone.
+.It Fl -starttls Ar proto
+STARTTLS protocol used to fetch the live certificate, as in
+.Cm generate .
 .It Fl -info
 Print the live certificate before the status line.
 .It Fl -warn Ar days
@@ -544,6 +591,13 @@ SMTP STARTTLS for
 $ gentlsa generate gmail.com 587 --hostname smtp --info
 .Ed
 .Pp
+IMAP on the well-known port, or SMTP on a nonstandard port:
+.Bd -literal -offset indent
+$ gentlsa generate example.com 143 --hostname imap
+$ gentlsa generate example.com 2525 --hostname mx --starttls smtp
+$ gentlsa generate example.com 25 --starttls none
+.Ed
+.Pp
 Nagios-style verify:
 .Bd -literal -offset indent
 $ gentlsa verify www.freebsd.org 443
@@ -584,7 +638,13 @@ RFC 7218
 RFC 7671
 .Pq DANE operational guidance ,
 RFC 2136
-.Pq dynamic updates .
+.Pq dynamic updates ,
+RFC 3207
+.Pq SMTP STARTTLS ,
+RFC 2595
+.Pq IMAP and POP3 STARTTLS ,
+RFC 6120
+.Pq XMPP .
 .Sh AUTHORS
 .An Emiel Kollof
 wrote the original Python tool.

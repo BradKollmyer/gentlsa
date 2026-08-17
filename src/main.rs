@@ -32,7 +32,7 @@ use crate::report::{
     ZoneRef, apply_dnssec, apply_expiry, expiry_phrase, verify_outcome, worst_verify_exit,
 };
 use crate::route53::Client as Route53;
-use crate::tlsa::{TlsaParams, connect_host, fqdn};
+use crate::tlsa::{StarttlsProto, TlsaParams, connect_host, fqdn};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -61,6 +61,7 @@ async fn run() -> Result<u8> {
             ports,
             hostname,
             info,
+            starttls,
             params,
             publisher,
             replace,
@@ -69,11 +70,20 @@ async fn run() -> Result<u8> {
             let publisher = PublisherOpts::from_flags(publisher, replace, dryrun)?;
             let params = params.params();
             require_default_params_for_publish(params, &publisher)?;
+            let starttls = starttls.proto();
             let mut code = 0;
             let mut results = Vec::new();
             for port in ports.as_slice() {
-                let (port_code, result) =
-                    generate(&zone, *port, hostname.as_deref(), info, params, publisher).await?;
+                let (port_code, result) = generate(
+                    &zone,
+                    *port,
+                    hostname.as_deref(),
+                    info,
+                    params,
+                    publisher,
+                    starttls,
+                )
+                .await?;
                 code = port_code;
                 results.push(result);
             }
@@ -90,6 +100,7 @@ async fn run() -> Result<u8> {
             zone,
             ports,
             hostname,
+            starttls,
             publisher,
             info,
         } => {
@@ -99,6 +110,7 @@ async fn run() -> Result<u8> {
                 hostname.as_deref(),
                 publisher.kind(),
                 info,
+                starttls.proto(),
             )
             .await
         }
@@ -106,14 +118,23 @@ async fn run() -> Result<u8> {
             zone,
             ports,
             hostname,
+            starttls,
             publisher,
             dryrun,
         } => {
+            let starttls = starttls.proto();
             let mut code = 0;
             let mut results = Vec::new();
             for port in ports.as_slice() {
-                let (port_code, result) =
-                    prune(&zone, *port, hostname.as_deref(), publisher.kind(), dryrun).await?;
+                let (port_code, result) = prune(
+                    &zone,
+                    *port,
+                    hostname.as_deref(),
+                    publisher.kind(),
+                    dryrun,
+                    starttls,
+                )
+                .await?;
                 code = port_code;
                 results.push(result);
             }
@@ -132,6 +153,7 @@ async fn run() -> Result<u8> {
             ports,
             hostname,
             info,
+            starttls,
             publisher,
             reload,
             ttl,
@@ -159,6 +181,7 @@ async fn run() -> Result<u8> {
                 reload,
                 ttl: ttl.unwrap_or(rollover::default_ttl(kind)),
                 dryrun,
+                starttls: starttls.proto(),
             };
             if schedule {
                 schedule_cmd(args).await
@@ -171,6 +194,7 @@ async fn run() -> Result<u8> {
             ports,
             hostname,
             info,
+            starttls,
             warn,
             critical,
             no_expiry_check,
@@ -191,6 +215,7 @@ async fn run() -> Result<u8> {
                 return Ok(3);
             }
             let expiry = (!no_expiry_check).then_some((warn, critical));
+            let starttls = starttls.proto();
             let ports = ports.as_slice();
             let multi = ports.len() > 1;
             let mut results = Vec::new();
@@ -204,6 +229,7 @@ async fn run() -> Result<u8> {
                         multi,
                         expiry,
                         !no_dnssec_check,
+                        starttls,
                     )
                     .await,
                 );
@@ -388,6 +414,7 @@ struct RolloverArgs<'a> {
     reload: Option<String>,
     ttl: u32,
     dryrun: bool,
+    starttls: Option<StarttlsProto>,
 }
 
 async fn schedule_cmd(args: RolloverArgs<'_>) -> Result<u8> {
@@ -408,6 +435,7 @@ async fn schedule_cmd(args: RolloverArgs<'_>) -> Result<u8> {
         args.reload.clone(),
         args.ttl,
         hash.clone(),
+        args.starttls,
     );
     if args.dryrun {
         output::text(format!(
@@ -492,6 +520,7 @@ async fn resume_cmd(filter: Option<&str>, info: bool, dryrun: bool) -> Result<u8
                     reload: job.reload.clone(),
                     ttl: job.ttl,
                     dryrun,
+                    starttls: job.starttls,
                 };
                 match execute_rollover(args, Some(job.clone()), false).await {
                     Ok(0) => summaries.push(ResumeJob {
@@ -545,6 +574,7 @@ async fn rollover_cmd(args: RolloverArgs<'_>) -> Result<u8> {
         args.reload.clone(),
         args.ttl,
         hash,
+        args.starttls,
     );
     if let Some(existing) = rollover::load_job_in(&rollover::state_dir()?, &job.id)?
         && existing.certificate.eq_ignore_ascii_case(&job.certificate)
@@ -578,6 +608,7 @@ async fn execute_rollover(
         reload,
         ttl,
         dryrun,
+        starttls,
     } = args;
     let publisher = PublisherOpts {
         kind: Some(kind),
@@ -686,7 +717,7 @@ async fn execute_rollover(
             }
             rollover::Phase::Wait(reason) => {
                 if *reason == rollover::WaitReason::BeforeReload
-                    && live_matches_file(&zone, ports, hostname, &hash).await
+                    && live_matches_file(&zone, ports, hostname, &hash, starttls).await
                 {
                     output::text(
                         ">>> service already presents the new certificate; skipping reload",
@@ -759,7 +790,7 @@ async fn execute_rollover(
                     output::text(">>> Prune");
                     for port in ports {
                         let (port_code, result) =
-                            prune(&zone, *port, hostname, Some(kind), false).await?;
+                            prune(&zone, *port, hostname, Some(kind), false, starttls).await?;
                         if port_code != 0 {
                             code = port_code;
                             error = result.error.clone();
@@ -784,7 +815,7 @@ async fn execute_rollover(
             .as_ref()
             .is_some_and(|report| report.status == "failed");
     if advise {
-        let advice = rollover::next_steps(&zone, ports, hostname, kind, ttl);
+        let advice = rollover::next_steps(&zone, ports, hostname, kind, ttl, starttls);
         output::text(&advice);
         next = Some(advice);
     }
@@ -816,12 +847,13 @@ async fn live_matches_file(
     ports: &[u16],
     hostname: Option<&str>,
     file_hash: &str,
+    starttls: Option<StarttlsProto>,
 ) -> bool {
     if ports.is_empty() {
         return false;
     }
     for port in ports {
-        let Some(live) = live_hash(zone, *port, hostname).await else {
+        let Some(live) = live_hash(zone, *port, hostname, starttls).await else {
             return false;
         };
         if !live.eq_ignore_ascii_case(file_hash) {
@@ -838,10 +870,11 @@ async fn generate(
     info: bool,
     params: TlsaParams,
     publisher: PublisherOpts,
+    starttls: Option<StarttlsProto>,
 ) -> Result<(u8, GenerateResult)> {
     let host = connect_host(zone, hostname);
     verbose::step(format_args!("generate {host}:{port}"));
-    let cert = fetch_live(&host, port)?;
+    let cert = fetch_live(&host, port, starttls)?;
     if !output::is_json() {
         cert.print_info_params(hostname, &[port], info, params)?;
     }
@@ -884,9 +917,14 @@ fn status_tag(status: Option<&str>) -> &'static str {
     }
 }
 
-async fn live_hash(zone: &str, port: u16, hostname: Option<&str>) -> Option<String> {
+async fn live_hash(
+    zone: &str,
+    port: u16,
+    hostname: Option<&str>,
+    starttls: Option<StarttlsProto>,
+) -> Option<String> {
     let host = connect_host(zone, hostname);
-    let cert = fetch_live(&host, port).ok()?;
+    let cert = fetch_live(&host, port, starttls).ok()?;
     cert.spki_sha256_hex().ok()
 }
 
@@ -896,6 +934,7 @@ async fn list(
     hostname: Option<&str>,
     publisher: Option<PublisherKind>,
     info: bool,
+    starttls: Option<StarttlsProto>,
 ) -> Result<u8> {
     let ports_label = if ports.is_empty() {
         "*".to_string()
@@ -1015,7 +1054,7 @@ async fn list(
                 .collect()
         };
         for port in info_ports {
-            if let Some(hash) = live_hash(zone_name, port, hostname).await {
+            if let Some(hash) = live_hash(zone_name, port, hostname, starttls).await {
                 hashes.insert(port, hash);
             }
         }
@@ -1326,13 +1365,14 @@ async fn prune(
     hostname: Option<&str>,
     publisher: Option<PublisherKind>,
     dryrun: bool,
+    starttls: Option<StarttlsProto>,
 ) -> Result<(u8, PruneResult)> {
     let host = connect_host(zone_name, hostname);
     verbose::step(format_args!(
         "prune {host}:{port} publisher={} dryrun={dryrun}",
         publisher.map(PublisherKind::flag).unwrap_or("(none)")
     ));
-    let cert = fetch_live(&host, port)?;
+    let cert = fetch_live(&host, port, starttls)?;
     let live_hash = cert.spki_sha256_hex()?;
     verbose::step(format_args!("live SPKI SHA-256 {live_hash}"));
     output::text(format!(
@@ -1441,6 +1481,7 @@ async fn prune(
     Ok((0, result))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn verify(
     zone: &str,
     port: u16,
@@ -1449,6 +1490,7 @@ async fn verify(
     prefix: bool,
     expiry: Option<(u32, u32)>,
     dnssec_check: bool,
+    starttls: Option<StarttlsProto>,
 ) -> VerifyResult {
     let say = |msg: &str| {
         if output::is_json() {
@@ -1503,7 +1545,7 @@ async fn verify(
         }
     };
 
-    let cert = match fetch_live(&host, port) {
+    let cert = match fetch_live(&host, port, starttls) {
         Ok(cert) => cert,
         Err(err) => {
             eprintln!("{err:#}");

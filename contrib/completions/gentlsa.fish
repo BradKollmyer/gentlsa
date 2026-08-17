@@ -42,6 +42,11 @@ complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "completions" -d 'Sh
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "file" -d 'Mutually exclusive publisher flags shared by generate/list/prune/file/rollover'
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l hostname -d 'Short hostname, without the zone (for example "mx")' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l starttls -d 'STARTTLS protocol, or none for implicit TLS. Default: infer from the port (25/587 smtp, 143 imap, 110 pop3, 5222/5269 xmpp)' -r -f -a "smtp\t''
+imap\t''
+pop3\t''
+xmpp\t''
+none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l usage -d 'TLSA certificate usage: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l selector -d 'TLSA selector: 0 full certificate, 1 SubjectPublicKeyInfo' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l matching -d 'TLSA matching type: 0 exact, 1 SHA2-256, 2 SHA2-512' -r
@@ -55,8 +60,13 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l replace -d 
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l dryrun -d 'With a publisher, print the action but do not write records'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l json -d 'Emit a single JSON object on stdout instead of text'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l hostname -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l starttls -d 'STARTTLS protocol, or none for implicit TLS. Default: infer from the port (25/587 smtp, 143 imap, 110 pop3, 5222/5269 xmpp)' -r -f -a "smtp\t''
+imap\t''
+pop3\t''
+xmpp\t''
+none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l route53 -d 'Publish / list / prune via Amazon Route 53'
@@ -65,8 +75,13 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l azure -d 'Publi
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l info -d 'Compare listed hashes to the live certificate'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -l json -d 'Emit a single JSON object on stdout instead of text'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand list" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l hostname -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l starttls -d 'STARTTLS protocol, or none for implicit TLS. Default: infer from the port (25/587 smtp, 143 imap, 110 pop3, 5222/5269 xmpp)' -r -f -a "smtp\t''
+imap\t''
+pop3\t''
+xmpp\t''
+none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l route53 -d 'Publish / list / prune via Amazon Route 53'
@@ -75,8 +90,13 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l azure -d 'Publ
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l dryrun
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l json -d 'Emit a single JSON object on stdout instead of text'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l hostname -d 'Short hostname, without the zone (for example "mx")' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l starttls -d 'STARTTLS protocol, or none for implicit TLS. Default: infer from the port (25/587 smtp, 143 imap, 110 pop3, 5222/5269 xmpp)' -r -f -a "smtp\t''
+imap\t''
+pop3\t''
+xmpp\t''
+none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l reload -d 'Command to run after 2× the TLSA TTL so the service presents the new certificate' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l ttl -d 'TLSA TTL in seconds; waits 2× this before reload and again before prune (default: 300 Cloudflare, 3600 otherwise)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l resume -d 'Resume a pending rollover after a reboot (all jobs, or one job id / zone)' -r
@@ -90,8 +110,13 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l dryrun -d '
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l schedule -d 'Write the job and start gentlsa-rollover@JOB (does not block)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -l json -d 'Emit a single JSON object on stdout instead of text'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand rollover" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l hostname -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l starttls -d 'STARTTLS protocol, or none for implicit TLS. Default: infer from the port (25/587 smtp, 143 imap, 110 pop3, 5222/5269 xmpp)' -r -f -a "smtp\t''
+imap\t''
+pop3\t''
+xmpp\t''
+none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l warn -d 'Warn when the live certificate expires in this many days or fewer' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l critical -d 'Critical when the live certificate expires in this many days or fewer' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l info
@@ -99,7 +124,7 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l no-expiry-che
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l no-dnssec-check -d 'Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l json -d 'Emit a single JSON object on stdout instead of text'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -s h -l help -d 'Print help'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -l info -d 'Print Cloudflare authentication status'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -l listzones -d 'List zones available to the configured account'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand cloudflare" -s v -l verbose -d 'Print each processing step to stderr'
