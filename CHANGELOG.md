@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 - 2026-08-17
 
 - `verify` warns (exit 1) or goes critical (exit 2) when the live certificate is near expiry (`--warn` / `--critical`, default 14 / 7 days)
 
