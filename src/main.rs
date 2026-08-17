@@ -3,6 +3,7 @@ mod cli;
 mod cloudflare;
 mod dns;
 mod tlsa;
+mod verbose;
 
 use std::process::ExitCode;
 
@@ -31,7 +32,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<u8> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    verbose::init(cli.verbose);
+
+    match cli.command {
         Command::Generate {
             zone,
             ports,
@@ -114,6 +118,7 @@ async fn run() -> Result<u8> {
             dryrun,
         } => {
             let ports = ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]);
+            verbose::step(format_args!("file {}", certfile.display()));
             let cert = Certificate::from_file(&certfile)?;
             cert.print_info(hostname.as_deref(), ports, info)?;
             if cloudflare {
@@ -153,6 +158,7 @@ async fn generate(
     dryrun: bool,
 ) -> Result<u8> {
     let host = connect_host(zone, hostname);
+    verbose::step(format_args!("generate {host}:{port}"));
     let cert = fetch_live(&host, port)?;
     cert.print_info(hostname, &[port], info)?;
 
@@ -183,6 +189,20 @@ async fn list(
     use_cloudflare: bool,
     info: bool,
 ) -> Result<u8> {
+    let ports_label = if ports.is_empty() {
+        "*".to_string()
+    } else {
+        ports
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    verbose::step(format_args!(
+        "list {zone_name} ports={ports_label} hostname={} cloudflare={use_cloudflare} info={info}",
+        hostname.unwrap_or("(none)")
+    ));
+
     let cf_listed = if use_cloudflare {
         let cf = Cloudflare::from_env_or_config()
             .context("Please install/configure Cloudflare credentials for this to work.")?;
@@ -217,6 +237,7 @@ async fn list(
     };
 
     let live_by_port = if info {
+        verbose::step("fetching live certificates to mark current/stale");
         let mut hashes = std::collections::BTreeMap::new();
         let info_ports: Vec<u16> = if !ports.is_empty() {
             ports.to_vec()
@@ -298,8 +319,12 @@ async fn prune(
     dryrun: bool,
 ) -> Result<u8> {
     let host = connect_host(zone_name, hostname);
+    verbose::step(format_args!(
+        "prune {host}:{port} cloudflare={use_cloudflare} dryrun={dryrun}"
+    ));
     let cert = fetch_live(&host, port)?;
     let live_hash = cert.spki_sha256_hex()?;
+    verbose::step(format_args!("live SPKI SHA-256 {live_hash}"));
     println!("Live TLSA 3 1 1 {live_hash}");
 
     let name = fqdn(zone_name, port, hostname);
@@ -340,6 +365,8 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
         }
     };
 
+    let host = connect_host(zone, hostname);
+    verbose::step(format_args!("verify {host}:{port}"));
     let name = fqdn(zone, port, hostname);
     let dns_record = match dns::lookup_tlsa(&name).await {
         Ok(record) => record,
@@ -350,7 +377,6 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
         }
     };
 
-    let host = connect_host(zone, hostname);
     let cert = match fetch_live(&host, port) {
         Ok(cert) => cert,
         Err(err) => {
@@ -376,6 +402,7 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
     };
 
     if dns_record.is_empty() {
+        verbose::step(format_args!("no TLSA records at {name}"));
         say("UNKNOWN - Something went wrong. Check logs");
         return 3;
     }
@@ -384,9 +411,13 @@ async fn verify(zone: &str, port: u16, hostname: Option<&str>, info: bool, prefi
         .iter()
         .any(|record| tlsa::hashes_equal(&host_hash, &record.certificate))
     {
+        verbose::step("live hash matches a DNS TLSA record");
         say("OK - TLSA is valid");
         0
     } else {
+        verbose::step(format_args!(
+            "live hash {host_hash} does not match any DNS TLSA record"
+        ));
         let dns_text = dns_record
             .iter()
             .map(ToString::to_string)
@@ -406,6 +437,9 @@ async fn update_cloudflare(
     replace: bool,
     dryrun: bool,
 ) -> Result<u8> {
+    verbose::step(format_args!(
+        "Cloudflare publish zone={zone_name} port={port} replace={replace} dryrun={dryrun}"
+    ));
     let cf = Cloudflare::from_env_or_config()
         .context("Please install/configure Cloudflare credentials for this to work.")?;
     let Some(zone) = cf.zone_by_name(zone_name).await? else {
@@ -427,6 +461,10 @@ async fn update_cloudflare(
 }
 
 async fn cloudflare_cmd(info: bool, listzones: bool) -> Result<u8> {
+    verbose::step(format_args!(
+        "cloudflare info={info} listzones={}",
+        listzones || !info
+    ));
     let cf = Cloudflare::from_env_or_config()
         .context("Please install/configure Cloudflare credentials for this to work.")?;
     if info {

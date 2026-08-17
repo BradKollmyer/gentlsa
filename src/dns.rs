@@ -3,6 +3,8 @@ use hickory_resolver::Resolver;
 use hickory_resolver::proto::rr::RData;
 use hickory_resolver::proto::rr::rdata::TLSA;
 
+use crate::verbose;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsaRecord {
     pub usage: u8,
@@ -27,6 +29,7 @@ impl std::fmt::Display for TlsaRecord {
 }
 
 pub async fn lookup_tlsa(name: &str) -> Result<Vec<TlsaRecord>> {
+    verbose::step(format_args!("DNS TLSA lookup {name}"));
     let resolver = Resolver::builder_tokio()
         .context("failed to load system resolver config")?
         .build()
@@ -35,16 +38,22 @@ pub async fn lookup_tlsa(name: &str) -> Result<Vec<TlsaRecord>> {
     let lookup = match resolver.tlsa_lookup(name).await {
         Ok(lookup) => lookup,
         Err(err) => {
+            verbose::step(format_args!("DNS lookup failed: {err}"));
             eprintln!("Exception occured: {err}");
             return Ok(Vec::new());
         }
     };
 
-    Ok(lookup
+    let records: Vec<TlsaRecord> = lookup
         .answers()
         .iter()
         .filter_map(|answer| from_rdata(&answer.data))
-        .collect())
+        .collect();
+    verbose::step(format_args!(
+        "DNS returned {} TLSA record(s)",
+        records.len()
+    ));
+    Ok(records)
 }
 
 fn from_rdata(rdata: &RData) -> Option<TlsaRecord> {

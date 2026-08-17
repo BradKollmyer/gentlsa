@@ -5,6 +5,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 use crate::tlsa;
+use crate::verbose;
 
 const API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
@@ -122,11 +123,13 @@ impl Zone {
 
 impl Client {
     pub fn from_env_or_config() -> Result<Self> {
+        verbose::step("loading Cloudflare credentials");
         let auth = load_auth()?;
         let auth_label = match &auth {
             Auth::Token(_) => "API token".to_string(),
             Auth::Key { email, .. } => format!("global API key ({email})"),
         };
+        verbose::step(format_args!("Cloudflare auth: {auth_label}"));
         let http = reqwest::Client::builder()
             .default_headers(auth_headers(&auth)?)
             .build()
@@ -143,11 +146,17 @@ impl Client {
     }
 
     pub async fn zone_by_name(&self, name: &str) -> Result<Option<Zone>> {
+        verbose::step(format_args!("looking up Cloudflare zone {name}"));
         let zones: Vec<Zone> = self
             .get_result(&format!("/zones?name={name}"))
             .await
             .with_context(|| format!("failed to look up Cloudflare zone {name}"))?;
-        Ok(zones.into_iter().next())
+        let zone = zones.into_iter().next();
+        match &zone {
+            Some(zone) => verbose::step(format_args!("found zone {} ({})", zone.name, zone.id)),
+            None => verbose::step(format_args!("no Cloudflare zone named {name}")),
+        }
+        Ok(zone)
     }
 
     pub async fn list_tlsa(
@@ -184,17 +193,29 @@ impl Client {
         dryrun: bool,
     ) -> Result<()> {
         let owner = tlsa::owner_name(port, hostname);
+        let mode_label = match mode {
+            PublishMode::Replace => "replace",
+            PublishMode::Rollover => "rollover",
+        };
+        verbose::step(format_args!(
+            "publish {owner} mode={mode_label} dryrun={dryrun}"
+        ));
         let expected = expected_names(zone, hostname, port);
         let records = self.tlsa_records(zone).await?;
         let ours: Vec<&DnsRecord> = records
             .iter()
             .filter(|record| record.matches_owner(&expected))
             .collect();
+        verbose::step(format_args!(
+            "found {} existing TLSA record(s) for {owner}",
+            ours.len()
+        ));
 
         if ours
             .iter()
             .any(|record| record.hash_matches(certificate) && record.is_dane_ee_spki_sha256())
         {
+            verbose::step("live hash already published, skipping");
             println!(
                 "Cloudflare: TLSA already published for {} ({owner})",
                 zone.name
@@ -273,6 +294,10 @@ impl Client {
         live_hash: &str,
         dryrun: bool,
     ) -> Result<usize> {
+        verbose::step(format_args!(
+            "prune stale TLSA for {} port {port} dryrun={dryrun}",
+            tlsa::owner_name(port, hostname)
+        ));
         let expected = expected_names(zone, hostname, port);
         let records = self.tlsa_records(zone).await?;
         let stale: Vec<&DnsRecord> = records
@@ -283,6 +308,7 @@ impl Client {
                     && !record.hash_matches(live_hash)
             })
             .collect();
+        verbose::step(format_args!("{} stale TLSA record(s)", stale.len()));
 
         if stale.is_empty() {
             println!("Cloudflare: no stale TLSA records for {}", zone.name);
@@ -313,6 +339,7 @@ impl Client {
     }
 
     async fn tlsa_records(&self, zone: &Zone) -> Result<Vec<DnsRecord>> {
+        verbose::step("listing Cloudflare TLSA records");
         self.get_result(&format!("/zones/{}/dns_records?type=TLSA", zone.id))
             .await
             .context("failed to list Cloudflare TLSA records")
@@ -327,6 +354,7 @@ impl Client {
     }
 
     async fn get_result<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
+        verbose::step(format_args!("Cloudflare GET {path}"));
         let response = self
             .http
             .get(format!("{API_BASE}{path}"))
@@ -341,6 +369,7 @@ impl Client {
         path: &str,
         body: &T,
     ) -> Result<R> {
+        verbose::step(format_args!("Cloudflare POST {path}"));
         let response = self
             .http
             .post(format!("{API_BASE}{path}"))
@@ -356,6 +385,7 @@ impl Client {
         path: &str,
         body: &T,
     ) -> Result<R> {
+        verbose::step(format_args!("Cloudflare PUT {path}"));
         let response = self
             .http
             .put(format!("{API_BASE}{path}"))
@@ -367,6 +397,7 @@ impl Client {
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
+        verbose::step(format_args!("Cloudflare DELETE {path}"));
         let response = self
             .http
             .delete(format!("{API_BASE}{path}"))
@@ -521,16 +552,22 @@ fn auth_headers(auth: &Auth) -> Result<HeaderMap> {
 
 fn load_auth() -> Result<Auth> {
     if let Ok(token) = first_env(&["CF_API_TOKEN", "CLOUDFLARE_API_TOKEN"]) {
+        verbose::step("Cloudflare credentials from CF_API_TOKEN / CLOUDFLARE_API_TOKEN");
         return Ok(Auth::Token(token));
     }
 
     let email = first_env(&["CF_API_EMAIL", "CLOUDFLARE_EMAIL"]).ok();
     let key = first_env(&["CF_API_KEY", "CLOUDFLARE_API_KEY"]).ok();
     if let (Some(email), Some(key)) = (email, key) {
+        verbose::step("Cloudflare credentials from CF_API_EMAIL / CF_API_KEY");
         return Ok(Auth::Key { email, key });
     }
 
     if let Some(auth) = load_config_auth()? {
+        verbose::step(format_args!(
+            "Cloudflare credentials from {}",
+            config_path().display()
+        ));
         return Ok(auth);
     }
 

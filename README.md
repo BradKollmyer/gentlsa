@@ -77,15 +77,28 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
-gentlsa list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare] [--info]
-gentlsa prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
-gentlsa verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
-gentlsa cloudflare [--info] [--listzones]
-gentlsa file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare]
+gentlsa [-v|--verbose] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
+gentlsa [-v|--verbose] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare] [--info]
+gentlsa [-v|--verbose] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
+gentlsa [-v|--verbose] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
+gentlsa [-v|--verbose] cloudflare [--info] [--listzones]
+gentlsa [-v|--verbose] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare]
 ```
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
+
+`-v` / `--verbose` prints each processing step to stderr (connect, STARTTLS, handshake, DNS lookup, Cloudflare API). Regular output stays on stdout, so `verify` remains Nagios-safe.
+
+```
+$ gentlsa generate example.com 443 -v
+verbose: generate example.com:443
+verbose: connecting to example.com:443 (implicit TLS)
+verbose: TCP connected to example.com:443
+verbose: TLS handshake with example.com
+verbose: received leaf certificate (1234 bytes)
+verbose: SPKI SHA-256 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
+_443._tcp TLSA 3 1 1 0856752f53199a673dcc955c137fe1f5b105a180528acb320bb3eddf15103a9b
+```
 
 ### generate
 

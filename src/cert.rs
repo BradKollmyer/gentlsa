@@ -17,6 +17,7 @@ use x509_parser::prelude::FromDer;
 use x509_parser::time::ASN1Time;
 
 use crate::tlsa::{self, owner_name};
+use crate::verbose;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -33,13 +34,16 @@ impl Certificate {
 
     pub fn from_pem_or_der(bytes: &[u8]) -> Result<Self> {
         if looks_like_pem(bytes) {
+            verbose::step("parsing PEM certificate");
             let pem = pem::parse(bytes).context("failed to parse PEM certificate")?;
             return Self::from_der(pem.contents().to_vec());
         }
+        verbose::step("parsing DER certificate");
         Self::from_der(bytes.to_vec())
     }
 
     pub fn from_file(path: &Path) -> Result<Self> {
+        verbose::step(format_args!("reading certificate {}", path.display()));
         let bytes = std::fs::read(path)
             .with_context(|| format!("failed to read certificate {}", path.display()))?;
         Self::from_pem_or_der(&bytes)
@@ -84,6 +88,7 @@ impl Certificate {
         }
 
         let hash = self.spki_sha256_hex()?;
+        verbose::step(format_args!("SPKI SHA-256 {hash}"));
         if ports.is_empty() {
             println!(
                 "TLSA {} {} {} {hash}",
@@ -102,12 +107,14 @@ impl Certificate {
 
 pub fn fetch_live(host: &str, port: u16) -> Result<Certificate> {
     if tlsa::uses_starttls(port) {
+        verbose::step(format_args!("connecting to {host}:{port} (SMTP STARTTLS)"));
         let stream = smtp_starttls(host, port)
             .with_context(|| format!("Exception: Connection error: STARTTLS {host}:{port}"))?;
         return tls_peer_cert(stream, host)
             .with_context(|| format!("Exception: Connection error: TLS {host}:{port}"));
     }
 
+    verbose::step(format_args!("connecting to {host}:{port} (implicit TLS)"));
     let stream = tcp_connect(host, port)
         .with_context(|| format!("Exception: Connection error: connect {host}:{port}"))?;
     tls_peer_cert(stream, host)
@@ -126,6 +133,7 @@ fn tcp_connect(host: &str, port: u16) -> Result<TcpStream> {
     stream.set_read_timeout(Some(IO_TIMEOUT))?;
     stream.set_write_timeout(Some(IO_TIMEOUT))?;
     stream.set_nodelay(true)?;
+    verbose::step(format_args!("TCP connected to {host}:{port}"));
     Ok(stream)
 }
 
@@ -135,16 +143,19 @@ fn smtp_starttls(host: &str, port: u16) -> Result<TcpStream> {
     if code != 220 {
         bail!("SMTP banner rejected ({code}): {text}");
     }
+    verbose::step(format_args!("SMTP banner {code}"));
 
     let (code, text) = smtp_command(&mut stream, "EHLO gentlsa")?;
     if code != 250 {
         bail!("EHLO rejected ({code}): {text}");
     }
+    verbose::step("SMTP EHLO accepted");
 
     let (code, text) = smtp_command(&mut stream, "STARTTLS")?;
     if code != 220 {
         bail!("STARTTLS rejected ({code}): {text}");
     }
+    verbose::step("SMTP STARTTLS accepted");
     Ok(stream)
 }
 
@@ -202,6 +213,7 @@ fn tls_peer_cert(mut stream: TcpStream, server_name: &str) -> Result<Certificate
     let mut conn = ClientConnection::new(Arc::new(client_config()?), name)
         .context("failed to create TLS client")?;
 
+    verbose::step(format_args!("TLS handshake with {server_name}"));
     while conn.is_handshaking() {
         conn.complete_io(&mut stream)
             .context("TLS handshake failed")?;
@@ -212,6 +224,10 @@ fn tls_peer_cert(mut stream: TcpStream, server_name: &str) -> Result<Certificate
         .and_then(|certs| certs.first())
         .map(|cert| cert.as_ref().to_vec())
         .context("no peer certificate")?;
+    verbose::step(format_args!(
+        "received leaf certificate ({} bytes)",
+        der.len()
+    ));
     Certificate::from_der(der)
 }
 

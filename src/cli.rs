@@ -47,6 +47,10 @@ impl FromStr for Ports {
     arg_required_else_help = true
 )]
 pub struct Cli {
+    /// Print each processing step to stderr
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -205,5 +209,18 @@ mod tests {
             Command::File { ports, .. } => assert_eq!(ports.unwrap().0, vec![25, 465]),
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn clap_global_verbose() {
+        let before = Cli::try_parse_from(["gentlsa", "-v", "list", "example.com"]).unwrap();
+        assert!(before.verbose);
+
+        let after = Cli::try_parse_from(["gentlsa", "generate", "example.com", "443", "--verbose"])
+            .unwrap();
+        assert!(after.verbose);
+
+        let off = Cli::try_parse_from(["gentlsa", "list", "example.com"]).unwrap();
+        assert!(!off.verbose);
     }
 }
