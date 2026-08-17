@@ -32,7 +32,7 @@ sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/downloa
 sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
 ```
 
-Or download the versioned file (`gentlsa-0.4.2-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`. Same files if you `rpm -i` the package. After install, enable the resume timer if you use `rollover`:
+Or download the versioned file (`gentlsa-0.4.3-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`. Same files if you `rpm -i` the package. After install, enable the resume timer if you use `rollover`:
 
 ```
 sudo systemctl enable --now gentlsa-resume.timer
@@ -59,7 +59,7 @@ FreeBSD (installs `/usr/local/bin/gentlsa` only — no systemd units):
 sudo pkg add https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.amd64.pkg
 ```
 
-Or download the versioned file (`gentlsa-0.4.2.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package. Resume an interrupted rollover with `gentlsa rollover --resume` from cron or `@reboot`.
+Or download the versioned file (`gentlsa-0.4.3.amd64.pkg`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo pkg add ./gentlsa-*.pkg`. On other major versions, `pkg add -f` if the ABI check refuses the package. Resume an interrupted rollover with `gentlsa rollover --resume` from cron or `@reboot`.
 
 Windows (PowerShell):
 
@@ -220,14 +220,14 @@ $ gentlsa prune example.com 443 --cloudflare
 
 ### rollover
 
-Publish a not-yet-live certificate hash, wait one TLSA TTL, run `--reload`, wait again, then prune hashes that no longer match the live certificate. A publisher flag is required. `--replace` is not available.
+Publish a not-yet-live certificate hash, wait two TLSA TTLs (RFC 7671), run `--reload`, wait two TTLs again, then prune hashes that no longer match the live certificate. A publisher flag is required. `--replace` is not available.
 
 ```
 $ gentlsa rollover /etc/letsencrypt/live/example.com/cert.pem example.com 443 \
     --cloudflare --reload "systemctl reload nginx"
 ```
 
-`--ttl` defaults to 300s for Cloudflare (auto TTL) and 3600s for `--nsupdate`, `--route53`, and `--google`. `--ttl 0` skips both waits (unsafe on a live resolver). `--dryrun` prints the sequence without writing, sleeping, or running `--reload`.
+`--ttl` is the TLSA record TTL: 300s for Cloudflare (auto TTL) and 3600s for `--nsupdate`, `--route53`, and `--google`. Each wait is **2×** that value (600s / 7200s). `--ttl 0` skips both waits (unsafe on a live resolver). `--dryrun` prints the sequence without writing, sleeping, or running `--reload`.
 
 Without `--reload`, only the new hash is published and the remaining wait / reload / prune steps are printed. Do not prune before the service presents the new cert.
 
@@ -265,7 +265,7 @@ $ gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --p
 
 `TLSA 3 1 1` hashes the leaf public key. A typical Let's Encrypt renewal mints a new key, so the hash changes. Replacing the DNS record at the same moment you reload the cert leaves a window where caches have one side of the pair and not the other.
 
-[`rollover`](#rollover) is the automated sequence: publish the file hash (not yet served), wait one TTL, `--reload`, wait again, prune. After a reboot the new cert is usually already live (the service re-reads the PEM); `--resume` notices that, skips `--reload`, and only waits until it is safe to prune.
+[`rollover`](#rollover) is the automated sequence: publish the file hash (not yet served), wait two TTLs, `--reload`, wait two TTLs again, prune. After a reboot the new cert is usually already live (the service re-reads the PEM); `--resume` notices that, skips `--reload`, and only waits until it is safe to prune.
 
 ### systemd units
 
@@ -314,9 +314,9 @@ The same sequence by hand:
    gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --port 443 --cloudflare
    # or: --nsupdate / --route53 / --google
    ```
-3. Wait at least as long as the TLSA TTL (and any resolver cache).
+3. Wait at least two TLSA TTLs (and any resolver cache).
 4. Reload the service so it presents the new certificate.
-5. After another TTL, drop the old hash:
+5. After another two TTLs, drop the old hash:
    ```
    gentlsa prune example.com 443 --cloudflare
    ```
@@ -501,8 +501,8 @@ Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag
 
 ```
 # bump version in Cargo.toml and CHANGELOG.md
-git commit -am "release: 0.4.2"
-git tag v0.4.2
+git commit -am "release: 0.4.3"
+git tag v0.4.3
 git push && git push --tags
 ```
 

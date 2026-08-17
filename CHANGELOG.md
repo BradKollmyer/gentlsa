@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3 - 2026-08-17
+
+- `rollover` waits 2× the TLSA TTL before reload and again before prune (RFC 7671 §8.1)
+
 ## 0.4.2 - 2026-08-17
 
 - `verify --no-expiry-check` restores the hash-only verdict (the pre-0.4.1 exit behavior, where a matching cert near expiry still exits 0)

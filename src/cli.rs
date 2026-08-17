@@ -143,7 +143,7 @@ pub enum Command {
         #[arg(long)]
         dryrun: bool,
     },
-    /// Publish a new-cert hash, wait the TLSA TTL, reload, wait, then prune
+    /// Publish a new-cert hash, wait 2× the TLSA TTL, reload, wait, then prune
     Rollover {
         /// Local PEM or DER of the new certificate (not yet served)
         #[arg(required_unless_present = "resume")]
@@ -161,10 +161,10 @@ pub enum Command {
         info: bool,
         #[command(flatten)]
         publisher: PublisherFlags,
-        /// Command to run after the first TTL so the service presents the new certificate
+        /// Command to run after 2× the TLSA TTL so the service presents the new certificate
         #[arg(long, value_name = "CMD")]
         reload: Option<String>,
-        /// Seconds to wait before reload and again before prune (default: 300 Cloudflare, 3600 otherwise)
+        /// TLSA TTL in seconds; waits 2× this before reload and again before prune (default: 300 Cloudflare, 3600 otherwise)
         #[arg(long)]
         ttl: Option<u32>,
         /// Print the sequence without writing records, sleeping, or running --reload

@@ -17,6 +17,13 @@ pub fn default_ttl(kind: PublisherKind) -> u32 {
     }
 }
 
+/// RFC 7671 §8.1: publish the new hash at least two TTLs before deploying the new chain.
+pub const WAIT_TTL_MULTIPLIER: u64 = 2;
+
+pub fn wait_seconds(ttl: u32) -> u64 {
+    u64::from(ttl).saturating_mul(WAIT_TTL_MULTIPLIER)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitReason {
     BeforeReload,
@@ -72,8 +79,9 @@ pub fn next_steps(
         prune.push_str(" --hostname ");
         prune.push_str(host);
     }
+    let wait = wait_seconds(ttl);
     format!(
-        ">>> Next: wait {ttl}s, reload the service so it presents the new certificate, wait another {ttl}s, then:\n    {prune}"
+        ">>> Next: wait {wait}s (2× TLSA TTL), reload the service so it presents the new certificate, wait another {wait}s, then:\n    {prune}"
     )
 }
 
@@ -215,8 +223,9 @@ impl Job {
 
     pub fn mark_published(&mut self, now: u64) {
         self.published_at = Some(now);
-        self.reload_after = Some(now + u64::from(self.ttl));
-        self.prune_after = Some(now + u64::from(self.ttl) * 2);
+        let wait = wait_seconds(self.ttl);
+        self.reload_after = Some(now + wait);
+        self.prune_after = Some(now + wait.saturating_mul(2));
         self.phase = if self.reload.is_some() {
             JobPhase::WaitBeforeReload
         } else {
@@ -226,7 +235,7 @@ impl Job {
 
     pub fn mark_reloaded(&mut self, now: u64) {
         self.reloaded_at = Some(now);
-        let prune_at = now + u64::from(self.ttl);
+        let prune_at = now + wait_seconds(self.ttl);
         self.prune_after = Some(self.prune_after.unwrap_or(prune_at).max(prune_at));
         self.phase = JobPhase::WaitBeforePrune;
     }
@@ -538,6 +547,14 @@ mod tests {
     }
 
     #[test]
+    fn wait_is_two_ttls() {
+        assert_eq!(wait_seconds(0), 0);
+        assert_eq!(wait_seconds(300), 600);
+        assert_eq!(wait_seconds(3600), 7200);
+        assert_eq!(wait_seconds(u32::MAX), u64::from(u32::MAX) * 2);
+    }
+
+    #[test]
     fn phases_depend_on_reload() {
         assert_eq!(phases(false), &[Phase::Publish]);
         assert_eq!(
@@ -555,7 +572,7 @@ mod tests {
     #[test]
     fn next_steps_includes_prune_command() {
         let msg = next_steps("example.com", &[443], None, PublisherKind::Cloudflare, 300);
-        assert!(msg.contains("wait 300s"));
+        assert!(msg.contains("wait 600s (2× TLSA TTL)"));
         assert!(msg.contains("gentlsa prune example.com 443 --cloudflare"));
         assert!(!msg.contains("--hostname"));
 
@@ -635,17 +652,17 @@ mod tests {
         );
         job.mark_published(1_000);
         assert_eq!(job.phase, JobPhase::WaitBeforeReload);
-        assert_eq!(job.reload_after, Some(1_300));
-        assert_eq!(job.prune_after, Some(1_600));
+        assert_eq!(job.reload_after, Some(1_600));
+        assert_eq!(job.prune_after, Some(2_200));
 
         job.mark_already_live(1_100);
         assert_eq!(job.phase, JobPhase::WaitBeforePrune);
         assert_eq!(job.reloaded_at, Some(1_100));
         // keep the original prune deadline when it is later
-        assert_eq!(job.prune_after, Some(1_600));
+        assert_eq!(job.prune_after, Some(2_200));
 
-        job.mark_already_live(1_400);
-        assert_eq!(job.prune_after, Some(1_700));
+        job.mark_already_live(1_700);
+        assert_eq!(job.prune_after, Some(2_300));
     }
 
     fn test_dir() -> PathBuf {

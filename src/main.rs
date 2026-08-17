@@ -655,7 +655,7 @@ async fn execute_rollover(
                     (rollover::WaitReason::BeforePrune, Some(job)) => {
                         rollover::remaining(job.prune_after, rollover::now_unix())
                     }
-                    _ => u64::from(ttl),
+                    _ => rollover::wait_seconds(ttl),
                 };
                 rollover::wait_ttl(seconds, *reason, dryrun).await;
                 if let Some(job) = job.as_mut() {
