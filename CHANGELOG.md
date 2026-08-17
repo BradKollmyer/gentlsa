@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Publish, list, and prune TLSA records via RFC 2136 dynamic update (`--nsupdate`, TSIG)
 - Read Cloudflare credentials from `/etc/gentlsa/cloudflare.cfg` (falls back to `~/.cloudflare/cloudflare.cfg`)
 - Add `--json` to emit a single JSON object on stdout
 - Add `-v` / `--verbose` to print each processing step on stderr

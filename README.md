@@ -79,12 +79,13 @@ cargo build --release
 ## Usage
 
 ```
-gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare] [--replace] [--dryrun]
-gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare] [--info]
-gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare] [--dryrun]
+gentlsa [-v|--verbose] [--json] generate <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info] [--cloudflare|--nsupdate] [--replace] [--dryrun]
+gentlsa [-v|--verbose] [--json] list <ZONE> [PORTS] [--hostname <HOSTNAME>] [--cloudflare|--nsupdate] [--info]
+gentlsa [-v|--verbose] [--json] prune <ZONE> <PORTS> [--hostname <HOSTNAME>] [--cloudflare|--nsupdate] [--dryrun]
 gentlsa [-v|--verbose] [--json] verify <ZONE> <PORTS> [--hostname <HOSTNAME>] [--info]
 gentlsa [-v|--verbose] [--json] cloudflare [--info] [--listzones]
-gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare]
+gentlsa [-v|--verbose] [--json] nsupdate [--info]
+gentlsa [-v|--verbose] [--json] file <CERTFILE> [--zone <ZONE>] [--hostname <HOSTNAME>] [--port <PORTS>] [--cloudflare|--nsupdate]
 ```
 
 `--hostname` is the short host without the zone (`mx` becomes `mx.example.org`). `PORTS` is one port or a comma-separated list (`443` or `25,465`). Ports **25** and **587** use SMTP STARTTLS. Every other port, including 443 and 465, uses implicit TLS. Certificate verification is disabled on purpose so the presented leaf cert can be hashed even when it is expired or otherwise untrusted.
@@ -154,7 +155,7 @@ SMTP STARTTLS example (connects to `smtp.gmail.com:587`):
 $ gentlsa generate gmail.com 587 --hostname smtp --info
 ```
 
-`--cloudflare` publishes the live hash in Cloudflare. If a TLSA record already exists, the new hash is **added** and the old one is kept (DANE key rollover). Use `--replace` to overwrite instead. `--dryrun` shows the action without writing.
+`--cloudflare` or `--nsupdate` publishes the live hash. If a TLSA record already exists, the new hash is **added** and the old one is kept (DANE key rollover). Use `--replace` to overwrite instead. `--dryrun` shows the action without writing. The two publishers are mutually exclusive.
 
 ```
 $ gentlsa generate example.com 443 --cloudflare --info
@@ -180,7 +181,7 @@ OK - TLSA is valid
 
 ### list
 
-Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--info` fetches the live certificate and marks each hash current or stale. Omit `PORTS` to include every port (Cloudflare can list the whole zone; public DNS is queried for each name found there).
+Show TLSA records from DNS. `--cloudflare` also prints what Cloudflare has. `--nsupdate` queries the configured primary (or AXFR when `PORTS` is omitted). `--info` fetches the live certificate and marks each hash current or stale. Omit `PORTS` to include every port (Cloudflare and AXFR can list the whole zone; public DNS is queried for each name found there).
 
 ```
 $ gentlsa list example.com 443
@@ -203,7 +204,7 @@ $ gentlsa prune example.com 443 --cloudflare
 
 ### file
 
-Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name. With `--cloudflare --zone --port`, publish that file's hash before you reload the service:
+Print the same TLSA data from a local PEM or DER certificate. Certificate details are shown by default. Pass `--port` / `--hostname` to include the owner name. With `--cloudflare` or `--nsupdate` (and `--zone --port`), publish that file's hash before you reload the service:
 
 ```
 $ gentlsa file /etc/ssl/certs/example.pem --port 443
@@ -230,6 +231,7 @@ Safer sequence:
 2. Publish the **new** hash next to the old one:
    ```
    gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --port 443 --cloudflare
+   # or: --nsupdate
    ```
 3. Wait at least as long as the TLSA TTL (and any resolver cache).
 4. Reload the service so it presents the new certificate.
@@ -284,6 +286,53 @@ Environment variables override the config file:
 | `CLOUDFLARE_EMAIL` + `CLOUDFLARE_API_KEY` | Same as above |
 
 The token needs Zone read and DNS edit on the zones you publish to.
+
+## nsupdate (RFC 2136 / TSIG)
+
+`--nsupdate` talks to an authoritative nameserver with RFC 2136 dynamic updates, signed with TSIG. This is the self-hosted counterpart to `--cloudflare`. It does not shell out to the BIND `nsupdate` binary.
+
+Create `/etc/gentlsa/nsupdate.cfg` (or `~/.gentlsa/nsupdate.cfg`):
+
+```
+[Nsupdate]
+server = ns1.example.com
+port = 53
+key-name = gentlsa-update.
+secret = <base64 hmac>
+algorithm = hmac-sha256
+ttl = 3600
+```
+
+`hmac-sha256` is the default and the recommended algorithm. `hmac-sha384` and `hmac-sha512` are also accepted. The secret is BIND-style base64 (hex is accepted too).
+
+Environment variables override the config file:
+
+| Variable | Use |
+|----------|-----|
+| `GENTLSA_NSUPDATE_SERVER` | Nameserver host |
+| `GENTLSA_NSUPDATE_PORT` | Nameserver port (default 53) |
+| `GENTLSA_NSUPDATE_KEY_NAME` | TSIG key name |
+| `GENTLSA_NSUPDATE_SECRET` | TSIG secret |
+| `GENTLSA_NSUPDATE_ALGORITHM` | `hmac-sha256` / `hmac-sha384` / `hmac-sha512` |
+| `GENTLSA_NSUPDATE_TTL` | TTL for new records (default 3600) |
+
+```
+$ gentlsa nsupdate --info
+>>> nsupdate Information:
+Server: ns1.example.com:53
+Key name: gentlsa-update.
+Algorithm: hmac-sha256
+TTL: 3600
+
+$ gentlsa generate example.com 443 --nsupdate --dryrun
+$ gentlsa file /etc/letsencrypt/live/example.com/cert.pem --zone example.com --port 443 --nsupdate
+$ gentlsa list example.com 443 --nsupdate --info
+$ gentlsa prune example.com 443 --nsupdate --dryrun
+```
+
+`list --nsupdate` without ports tries AXFR. If the key is not allowed to transfer the zone, pass the ports instead.
+
+The nameserver must allow UPDATE (and AXFR, if you want port-less `list`) for that TSIG key on the zone.
 
 ## Development
 

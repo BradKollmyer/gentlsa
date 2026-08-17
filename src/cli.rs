@@ -74,12 +74,15 @@ pub enum Command {
         #[arg(long)]
         info: bool,
         /// Publish the TLSA hash in Cloudflare (adds the new hash, keeps any old one)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "nsupdate")]
         cloudflare: bool,
-        /// With --cloudflare, overwrite the existing TLSA instead of adding a rollover record
-        #[arg(long, requires = "cloudflare")]
+        /// Publish via RFC 2136 dynamic update (TSIG)
+        #[arg(long, conflicts_with = "cloudflare")]
+        nsupdate: bool,
+        /// With --cloudflare or --nsupdate, overwrite the existing TLSA instead of adding a rollover record
+        #[arg(long)]
         replace: bool,
-        /// With --cloudflare, print zone info but do not write records
+        /// With --cloudflare or --nsupdate, print the action but do not write records
         #[arg(long)]
         dryrun: bool,
     },
@@ -92,8 +95,11 @@ pub enum Command {
         #[arg(long)]
         hostname: Option<String>,
         /// Also list TLSA records from Cloudflare
-        #[arg(long)]
+        #[arg(long, conflicts_with = "nsupdate")]
         cloudflare: bool,
+        /// Also list TLSA records from the configured primary (RFC 2136 / AXFR)
+        #[arg(long, conflicts_with = "cloudflare")]
+        nsupdate: bool,
         /// Compare listed hashes to the live certificate
         #[arg(long)]
         info: bool,
@@ -107,8 +113,11 @@ pub enum Command {
         #[arg(long)]
         hostname: Option<String>,
         /// Delete stale records in Cloudflare
-        #[arg(long)]
+        #[arg(long, conflicts_with = "nsupdate")]
         cloudflare: bool,
+        /// Delete stale records via RFC 2136 dynamic update (TSIG)
+        #[arg(long, conflicts_with = "cloudflare")]
+        nsupdate: bool,
         #[arg(long)]
         dryrun: bool,
     },
@@ -132,10 +141,16 @@ pub enum Command {
         #[arg(long)]
         listzones: bool,
     },
+    /// RFC 2136 / TSIG helpers
+    Nsupdate {
+        /// Print nsupdate server and key (never the secret)
+        #[arg(long)]
+        info: bool,
+    },
     /// Show TLSA info for a local certificate file
     File {
         certfile: PathBuf,
-        /// Zone to publish into when using --cloudflare
+        /// Zone to publish into when using --cloudflare or --nsupdate
         #[arg(long)]
         zone: Option<String>,
         #[arg(long)]
@@ -147,9 +162,12 @@ pub enum Command {
         #[arg(long, default_value_t = true)]
         info: bool,
         /// Publish this certificate's hash in Cloudflare (key rollover)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "nsupdate")]
         cloudflare: bool,
-        #[arg(long, requires = "cloudflare")]
+        /// Publish this certificate's hash via RFC 2136 dynamic update (TSIG)
+        #[arg(long, conflicts_with = "cloudflare")]
+        nsupdate: bool,
+        #[arg(long)]
         replace: bool,
         #[arg(long)]
         dryrun: bool,
@@ -227,6 +245,55 @@ mod tests {
         let off = Cli::try_parse_from(["gentlsa", "list", "example.com"]).unwrap();
         assert!(!off.verbose);
         assert!(!off.json);
+    }
+
+    #[test]
+    fn clap_nsupdate_conflicts_with_cloudflare() {
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "generate",
+                "example.com",
+                "443",
+                "--cloudflare",
+                "--nsupdate"
+            ])
+            .is_err()
+        );
+        let cli = Cli::try_parse_from([
+            "gentlsa",
+            "generate",
+            "example.com",
+            "443",
+            "--nsupdate",
+            "--replace",
+            "--dryrun",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Generate {
+                nsupdate,
+                replace,
+                dryrun,
+                cloudflare,
+                ..
+            } => {
+                assert!(nsupdate);
+                assert!(replace);
+                assert!(dryrun);
+                assert!(!cloudflare);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_nsupdate_subcommand() {
+        let cli = Cli::try_parse_from(["gentlsa", "nsupdate", "--info"]).unwrap();
+        match cli.command {
+            Command::Nsupdate { info } => assert!(info),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]

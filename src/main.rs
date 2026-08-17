@@ -2,7 +2,9 @@ mod cert;
 mod cli;
 mod cloudflare;
 mod dns;
+mod nsupdate;
 mod output;
+mod publish;
 mod report;
 mod tlsa;
 mod verbose;
@@ -15,9 +17,11 @@ use clap::Parser;
 use crate::cert::{CertDetails, Certificate, fetch_live};
 use crate::cli::{Cli, Command};
 use crate::cloudflare::Client as Cloudflare;
+use crate::nsupdate::Config as Nsupdate;
+use crate::publish::{PublishMode, PublishReport};
 use crate::report::{
-    CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, PruneResult, Report,
-    VerifyResult, ZoneRef, verify_outcome, worst_verify_exit,
+    CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, NsupdateList,
+    PruneResult, Report, VerifyResult, ZoneRef, verify_outcome, worst_verify_exit,
 };
 use crate::tlsa::{connect_host, fqdn};
 
@@ -49,22 +53,22 @@ async fn run() -> Result<u8> {
             hostname,
             info,
             cloudflare,
+            nsupdate,
             replace,
             dryrun,
         } => {
+            let publisher = PublisherOpts {
+                cloudflare,
+                nsupdate,
+                replace,
+                dryrun,
+            };
+            publisher.require_replace()?;
             let mut code = 0;
             let mut results = Vec::new();
             for port in ports.as_slice() {
-                let (port_code, result) = generate(
-                    &zone,
-                    *port,
-                    hostname.as_deref(),
-                    info,
-                    cloudflare,
-                    replace,
-                    dryrun,
-                )
-                .await?;
+                let (port_code, result) =
+                    generate(&zone, *port, hostname.as_deref(), info, publisher).await?;
                 code = port_code;
                 results.push(result);
             }
@@ -82,6 +86,7 @@ async fn run() -> Result<u8> {
             ports,
             hostname,
             cloudflare,
+            nsupdate,
             info,
         } => {
             list(
@@ -89,6 +94,7 @@ async fn run() -> Result<u8> {
                 ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]),
                 hostname.as_deref(),
                 cloudflare,
+                nsupdate,
                 info,
             )
             .await
@@ -98,13 +104,21 @@ async fn run() -> Result<u8> {
             ports,
             hostname,
             cloudflare,
+            nsupdate,
             dryrun,
         } => {
             let mut code = 0;
             let mut results = Vec::new();
             for port in ports.as_slice() {
-                let (port_code, result) =
-                    prune(&zone, *port, hostname.as_deref(), cloudflare, dryrun).await?;
+                let (port_code, result) = prune(
+                    &zone,
+                    *port,
+                    hostname.as_deref(),
+                    cloudflare,
+                    nsupdate,
+                    dryrun,
+                )
+                .await?;
                 code = port_code;
                 results.push(result);
             }
@@ -141,6 +155,7 @@ async fn run() -> Result<u8> {
             Ok(worst)
         }
         Command::Cloudflare { info, listzones } => cloudflare_cmd(info, listzones).await,
+        Command::Nsupdate { info } => nsupdate_cmd(info).await,
         Command::File {
             certfile,
             zone,
@@ -148,9 +163,17 @@ async fn run() -> Result<u8> {
             ports,
             info,
             cloudflare,
+            nsupdate,
             replace,
             dryrun,
         } => {
+            let publisher = PublisherOpts {
+                cloudflare,
+                nsupdate,
+                replace,
+                dryrun,
+            };
+            publisher.require_replace()?;
             let ports = ports.as_ref().map(cli::Ports::as_slice).unwrap_or(&[]);
             verbose::step(format_args!("file {}", certfile.display()));
             let cert = Certificate::from_file(&certfile)?;
@@ -160,32 +183,54 @@ async fn run() -> Result<u8> {
 
             let mut code = 0;
             let mut cf_reports = Vec::new();
+            let mut ns_reports = Vec::new();
             let mut error = None;
-            if cloudflare {
-                let zone = zone
-                    .as_deref()
-                    .context("--zone is required with --cloudflare")?;
+            if publisher.active() {
+                let zone = zone.as_deref().with_context(|| {
+                    if publisher.nsupdate {
+                        "--zone is required with --nsupdate"
+                    } else {
+                        "--zone is required with --cloudflare"
+                    }
+                })?;
                 if ports.is_empty() {
-                    anyhow::bail!("--port is required with --cloudflare");
+                    anyhow::bail!(if publisher.nsupdate {
+                        "--port is required with --nsupdate"
+                    } else {
+                        "--port is required with --cloudflare"
+                    });
                 }
                 for port in ports {
-                    match update_cloudflare(
-                        zone,
-                        hostname.as_deref(),
-                        *port,
-                        &cert,
-                        info,
-                        replace,
-                        dryrun,
-                    )
-                    .await?
-                    {
-                        UpdateCf::Published(report) => cf_reports.push(report),
-                        UpdateCf::NotManaged => {
-                            error = Some("not_managed_by_cloudflare".into());
-                            code = 1;
-                            break;
+                    if publisher.cloudflare {
+                        match update_cloudflare(
+                            zone,
+                            hostname.as_deref(),
+                            *port,
+                            &cert,
+                            info,
+                            publisher,
+                        )
+                        .await?
+                        {
+                            UpdateCf::Published(report) => cf_reports.push(report),
+                            UpdateCf::NotManaged => {
+                                error = Some("not_managed_by_cloudflare".into());
+                                code = 1;
+                                break;
+                            }
                         }
+                    } else {
+                        ns_reports.push(
+                            update_nsupdate(
+                                zone,
+                                hostname.as_deref(),
+                                *port,
+                                &cert,
+                                info,
+                                publisher,
+                            )
+                            .await?,
+                        );
                     }
                 }
             }
@@ -208,6 +253,7 @@ async fn run() -> Result<u8> {
                         })
                         .collect(),
                     cloudflare: cf_reports,
+                    nsupdate: ns_reports,
                     error,
                 })?;
             }
@@ -216,14 +262,33 @@ async fn run() -> Result<u8> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PublisherOpts {
+    cloudflare: bool,
+    nsupdate: bool,
+    replace: bool,
+    dryrun: bool,
+}
+
+impl PublisherOpts {
+    fn active(self) -> bool {
+        self.cloudflare || self.nsupdate
+    }
+
+    fn require_replace(self) -> Result<()> {
+        if self.replace && !self.active() {
+            anyhow::bail!("--replace requires --cloudflare or --nsupdate");
+        }
+        Ok(())
+    }
+}
+
 async fn generate(
     zone: &str,
     port: u16,
     hostname: Option<&str>,
     info: bool,
-    use_cloudflare: bool,
-    replace: bool,
-    dryrun: bool,
+    publisher: PublisherOpts,
 ) -> Result<(u8, GenerateResult)> {
     let host = connect_host(zone, hostname);
     verbose::step(format_args!("generate {host}:{port}"));
@@ -240,11 +305,17 @@ async fn generate(
         if info { Some(cert.details()?) } else { None },
     );
 
-    if !use_cloudflare {
+    if publisher.nsupdate {
+        result.nsupdate =
+            Some(update_nsupdate(zone, hostname, port, &cert, info, publisher).await?);
         return Ok((0, result));
     }
 
-    match update_cloudflare(zone, hostname, port, &cert, info, replace, dryrun).await? {
+    if !publisher.cloudflare {
+        return Ok((0, result));
+    }
+
+    match update_cloudflare(zone, hostname, port, &cert, info, publisher).await? {
         UpdateCf::Published(report) => {
             result.cloudflare = Some(report);
             Ok((0, result))
@@ -283,6 +354,7 @@ async fn list(
     ports: &[u16],
     hostname: Option<&str>,
     use_cloudflare: bool,
+    use_nsupdate: bool,
     info: bool,
 ) -> Result<u8> {
     let ports_label = if ports.is_empty() {
@@ -295,7 +367,7 @@ async fn list(
             .join(",")
     };
     verbose::step(format_args!(
-        "list {zone_name} ports={ports_label} hostname={} cloudflare={use_cloudflare} info={info}",
+        "list {zone_name} ports={ports_label} hostname={} cloudflare={use_cloudflare} nsupdate={use_nsupdate} info={info}",
         hostname.unwrap_or("(none)")
     ));
 
@@ -314,6 +386,7 @@ async fn list(
                     live: Vec::new(),
                     dns: Vec::new(),
                     cloudflare: None,
+                    nsupdate: None,
                     note: None,
                     error,
                 })?;
@@ -326,22 +399,24 @@ async fn list(
         None
     };
 
+    let ns_listed = if use_nsupdate {
+        let ns = Nsupdate::from_env_or_config()
+            .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
+        let (records, axfr_note) = ns.list_tlsa(zone_name, hostname, ports).await?;
+        Some((ns.server_label(), records, axfr_note))
+    } else {
+        None
+    };
+
     let dns_names = if !ports.is_empty() {
         ports
             .iter()
             .map(|port| fqdn(zone_name, *port, hostname))
             .collect()
     } else if let Some((_, records)) = &cf_listed {
-        let mut names = Vec::new();
-        for record in records {
-            if !names
-                .iter()
-                .any(|name: &String| name.eq_ignore_ascii_case(&record.name))
-            {
-                names.push(record.name.clone());
-            }
-        }
-        names
+        unique_names(records.iter().map(|record| record.name.clone()))
+    } else if let Some((_, records, _)) = &ns_listed {
+        unique_names(records.iter().map(|record| record.name.clone()))
     } else {
         Vec::new()
     };
@@ -367,11 +442,12 @@ async fn list(
         std::collections::BTreeMap::new()
     };
 
-    let note = if ports.is_empty() && dns_names.is_empty() && cf_listed.is_none() {
-        Some("no port specified; pass 443 or 25,465 to query public DNS".to_string())
-    } else {
-        None
-    };
+    let note =
+        if ports.is_empty() && dns_names.is_empty() && cf_listed.is_none() && ns_listed.is_none() {
+            Some("no port specified; pass 443 or 25,465 to query public DNS".to_string())
+        } else {
+            None
+        };
 
     let mut dns = Vec::new();
     if note.is_none() && !dns_names.is_empty() {
@@ -416,6 +492,22 @@ async fn list(
             .collect(),
     });
 
+    let nsupdate = ns_listed
+        .as_ref()
+        .map(|(server, records, axfr_note)| NsupdateList {
+            server: server.clone(),
+            records: records
+                .iter()
+                .map(|record| {
+                    let live = tlsa::port_from_owner(&record.name)
+                        .and_then(|port| live_by_port.get(&port))
+                        .map(String::as_str);
+                    JsonTlsa::from_nsupdate(record, hash_status(live, &record.certificate))
+                })
+                .collect(),
+            note: axfr_note.clone(),
+        });
+
     if output::is_json() {
         output::emit(&Report::List {
             zone: zone_name.to_string(),
@@ -430,6 +522,7 @@ async fn list(
                 .collect(),
             dns,
             cloudflare,
+            nsupdate,
             note,
             error,
         })?;
@@ -477,7 +570,38 @@ async fn list(
             }
         }
     }
+
+    if let Some(ns) = &nsupdate {
+        println!(">>> nsupdate {}", ns.server);
+        if let Some(note) = &ns.note {
+            println!("({note})");
+        } else if ns.records.is_empty() {
+            println!("(none)");
+        } else {
+            for record in &ns.records {
+                println!(
+                    "{}  {}{}",
+                    record.name.as_deref().unwrap_or("-"),
+                    record.to_text(),
+                    status_tag(record.status)
+                );
+            }
+        }
+    }
     Ok(0)
+}
+
+fn unique_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in names {
+        if !out
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&name))
+        {
+            out.push(name);
+        }
+    }
+    out
 }
 
 async fn prune(
@@ -485,11 +609,12 @@ async fn prune(
     port: u16,
     hostname: Option<&str>,
     use_cloudflare: bool,
+    use_nsupdate: bool,
     dryrun: bool,
 ) -> Result<(u8, PruneResult)> {
     let host = connect_host(zone_name, hostname);
     verbose::step(format_args!(
-        "prune {host}:{port} cloudflare={use_cloudflare} dryrun={dryrun}"
+        "prune {host}:{port} cloudflare={use_cloudflare} nsupdate={use_nsupdate} dryrun={dryrun}"
     ));
     let cert = fetch_live(&host, port)?;
     let live_hash = cert.spki_sha256_hex()?;
@@ -526,8 +651,19 @@ async fn prune(
         live: live_hash.clone(),
         dns: dns_records,
         cloudflare: None,
+        nsupdate: None,
         error: None,
     };
+
+    if use_nsupdate {
+        let ns = Nsupdate::from_env_or_config()
+            .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
+        result.nsupdate = Some(
+            ns.prune_tlsa(zone_name, hostname, port, &live_hash, dryrun)
+                .await?,
+        );
+        return Ok((0, result));
+    }
 
     if !use_cloudflare {
         return Ok((0, result));
@@ -688,7 +824,7 @@ async fn verify(
 }
 
 enum UpdateCf {
-    Published(cloudflare::PublishReport),
+    Published(PublishReport),
     NotManaged,
 }
 
@@ -698,11 +834,11 @@ async fn update_cloudflare(
     port: u16,
     cert: &Certificate,
     info: bool,
-    replace: bool,
-    dryrun: bool,
+    publisher: PublisherOpts,
 ) -> Result<UpdateCf> {
     verbose::step(format_args!(
-        "Cloudflare publish zone={zone_name} port={port} replace={replace} dryrun={dryrun}"
+        "Cloudflare publish zone={zone_name} port={port} replace={} dryrun={}",
+        publisher.replace, publisher.dryrun
     ));
     let cf = Cloudflare::from_env_or_config()
         .context("Please install/configure Cloudflare credentials for this to work.")?;
@@ -714,18 +850,71 @@ async fn update_cloudflare(
         cf.print_zone_info(&zone);
     }
     let hash = cert.spki_sha256_hex()?;
-    let mode = if replace {
-        cloudflare::PublishMode::Replace
+    let mode = if publisher.replace {
+        PublishMode::Replace
     } else {
-        cloudflare::PublishMode::Rollover
+        PublishMode::Rollover
     };
     let mut report = cf
-        .publish_tlsa(&zone, hostname, port, &hash, mode, dryrun)
+        .publish_tlsa(&zone, hostname, port, &hash, mode, publisher.dryrun)
         .await?;
     if info {
-        report.info = Some(cloudflare::ZoneInfo::from_zone(&zone));
+        report.info = Some(serde_json::to_value(cloudflare::ZoneInfo::from_zone(
+            &zone,
+        ))?);
     }
     Ok(UpdateCf::Published(report))
+}
+
+async fn update_nsupdate(
+    zone_name: &str,
+    hostname: Option<&str>,
+    port: u16,
+    cert: &Certificate,
+    info: bool,
+    publisher: PublisherOpts,
+) -> Result<PublishReport> {
+    verbose::step(format_args!(
+        "nsupdate publish zone={zone_name} port={port} replace={} dryrun={}",
+        publisher.replace, publisher.dryrun
+    ));
+    let ns = Nsupdate::from_env_or_config()
+        .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
+    if info {
+        ns.print_info();
+    }
+    let hash = cert.spki_sha256_hex()?;
+    let mode = if publisher.replace {
+        PublishMode::Replace
+    } else {
+        PublishMode::Rollover
+    };
+    let mut report = ns
+        .publish_tlsa(zone_name, hostname, port, &hash, mode, publisher.dryrun)
+        .await?;
+    if info {
+        report.info = Some(serde_json::to_value(ns.info())?);
+    }
+    Ok(report)
+}
+
+async fn nsupdate_cmd(info: bool) -> Result<u8> {
+    verbose::step(format_args!("nsupdate info={info}"));
+    let ns = Nsupdate::from_env_or_config()
+        .context("Please configure nsupdate in /etc/gentlsa/nsupdate.cfg")?;
+    if !output::is_json() {
+        ns.print_info();
+    }
+    if output::is_json() {
+        let info = ns.info();
+        output::emit(&Report::Nsupdate {
+            server: info.server,
+            key_name: info.key_name,
+            algorithm: info.algorithm,
+            ttl: info.ttl,
+        })?;
+    }
+    Ok(0)
 }
 
 async fn cloudflare_cmd(info: bool, listzones: bool) -> Result<u8> {

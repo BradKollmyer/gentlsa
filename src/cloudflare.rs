@@ -5,6 +5,9 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 use crate::output;
+use crate::publish::{
+    self, DaneTlsa, PruneReport, PublishAction, PublishMode, PublishReport, names_equal,
+};
 use crate::tlsa;
 use crate::verbose;
 
@@ -72,44 +75,6 @@ pub struct ListedTlsa {
     pub selector: u8,
     pub matching: u8,
     pub certificate: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublishMode {
-    /// Add the live hash if it is missing; keep any existing hashes.
-    Rollover,
-    /// Overwrite the first matching 3 1 1 record (legacy behavior).
-    Replace,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublishAction {
-    AlreadyPublished,
-    Added,
-    Replaced,
-    WouldAdd,
-    WouldReplace,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PublishReport {
-    pub zone: String,
-    pub owner: String,
-    pub action: PublishAction,
-    pub mode: PublishMode,
-    pub dryrun: bool,
-    pub existing: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub info: Option<ZoneInfo>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PruneReport {
-    pub zone: String,
-    pub dryrun: bool,
-    pub stale: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -262,7 +227,8 @@ impl Client {
             info: None,
         };
 
-        let action = publish_action(&ours, certificate, mode, dryrun);
+        let dane: Vec<DaneTlsa> = ours.iter().filter_map(|record| record.to_dane()).collect();
+        let action = publish::publish_action(&dane, certificate, mode, dryrun);
         if action == PublishAction::AlreadyPublished {
             verbose::step("live hash already published, skipping");
             output::text(format!(
@@ -347,7 +313,7 @@ impl Client {
         ));
         let expected = expected_names(zone, hostname, port);
         let records = self.tlsa_records(zone).await?;
-        let stale = stale_tlsa(&records, &expected, live_hash);
+        let stale = stale_cf_tlsa(&records, &expected, live_hash);
         verbose::step(format_args!("{} stale TLSA record(s)", stale.len()));
 
         let hashes: Vec<String> = stale
@@ -482,78 +448,14 @@ impl Client {
 }
 
 fn expected_names(zone: &Zone, hostname: Option<&str>, port: u16) -> Vec<String> {
-    let mut names = vec![format!("_{port}._tcp.{}", zone.name)];
-    if let Some(host) = hostname.filter(|host| !host.is_empty()) {
-        names.push(format!("_{port}._tcp.{host}.{}", zone.name));
-    }
-    names
+    publish::owner_names(&zone.name, hostname, port)
 }
 
 fn record_matches(name: &str, zone: &Zone, hostname: Option<&str>, ports: &[u16]) -> bool {
-    if !ports.is_empty() {
-        return expected_names_for_ports(zone, hostname, ports)
-            .iter()
-            .any(|expected| expected.eq_ignore_ascii_case(name));
-    }
-    let Some(host) = hostname.filter(|host| !host.is_empty()) else {
-        return true;
-    };
-    owner_host(name, &zone.name)
-        .is_some_and(|labels| labels.is_empty() || labels.eq_ignore_ascii_case(host))
+    publish::record_matches_filter(name, &zone.name, hostname, ports)
 }
 
-fn expected_names_for_ports(zone: &Zone, hostname: Option<&str>, ports: &[u16]) -> Vec<String> {
-    ports
-        .iter()
-        .flat_map(|port| expected_names(zone, hostname, *port))
-        .collect()
-}
-
-/// Host labels after `_<port>._tcp` and before the zone, if the name is a TLSA owner.
-fn owner_host<'a>(name: &'a str, zone: &str) -> Option<&'a str> {
-    let name = name.trim_end_matches('.');
-    let zone = zone.trim_end_matches('.');
-    if name.len() <= zone.len() {
-        return None;
-    }
-    let (head, tail) = name.split_at(name.len() - zone.len());
-    if !tail.eq_ignore_ascii_case(zone) {
-        return None;
-    }
-    let rest = head.trim_end_matches('.');
-    let rest = rest.strip_prefix('_')?;
-    let (_, rest) = rest.split_once('.')?;
-    rest.strip_prefix("_tcp")
-        .map(|s| s.strip_prefix('.').unwrap_or(""))
-}
-
-fn publish_action(
-    ours: &[&DnsRecord],
-    certificate: &str,
-    mode: PublishMode,
-    dryrun: bool,
-) -> PublishAction {
-    if ours
-        .iter()
-        .any(|record| record.hash_matches(certificate) && record.is_dane_ee_spki_sha256())
-    {
-        return PublishAction::AlreadyPublished;
-    }
-    if mode == PublishMode::Replace && ours.iter().any(|record| record.is_dane_ee_spki_sha256()) {
-        return if dryrun {
-            PublishAction::WouldReplace
-        } else {
-            PublishAction::Replaced
-        };
-    }
-    if dryrun {
-        PublishAction::WouldAdd
-    } else {
-        PublishAction::Added
-    }
-}
-
-fn stale_tlsa<'a>(
+fn stale_cf_tlsa<'a>(
     records: &'a [DnsRecord],
     expected: &[String],
     live_hash: &str,
@@ -584,24 +486,26 @@ fn tlsa_payload(owner: &str, certificate: &str) -> TlsaPayload {
 
 impl DnsRecord {
     fn matches_owner(&self, expected: &[String]) -> bool {
-        self.record_type == "TLSA"
-            && expected
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(&self.name))
+        self.record_type == "TLSA" && expected.iter().any(|name| names_equal(name, &self.name))
     }
 
     fn is_dane_ee_spki_sha256(&self) -> bool {
-        self.data.as_ref().is_some_and(|data| {
-            data.usage == tlsa::USAGE
-                && data.selector == tlsa::SELECTOR
-                && data.matching_type == tlsa::MATCHING
-        })
+        self.to_dane()
+            .is_some_and(|dane| dane.is_dane_ee_spki_sha256())
     }
 
     fn hash_matches(&self, live: &str) -> bool {
-        self.data
-            .as_ref()
-            .is_some_and(|data| tlsa::hashes_equal(live, &data.certificate))
+        self.to_dane().is_some_and(|dane| dane.hash_matches(live))
+    }
+
+    fn to_dane(&self) -> Option<DaneTlsa> {
+        let data = self.data.as_ref()?;
+        Some(DaneTlsa {
+            usage: data.usage,
+            selector: data.selector,
+            matching: data.matching_type,
+            certificate: data.certificate.clone(),
+        })
     }
 }
 
@@ -822,53 +726,6 @@ mod tests {
     }
 
     #[test]
-    fn publish_action_table() {
-        let existing = record("_25._tcp.mx.example.org", "AA");
-        let other = record_data("_25._tcp.mx.example.org", "AA", 2, 1, 1);
-        let ours = [&existing];
-
-        assert_eq!(
-            publish_action(&ours, "aa", PublishMode::Rollover, false),
-            PublishAction::AlreadyPublished
-        );
-        assert_eq!(
-            publish_action(&ours, "aa", PublishMode::Replace, true),
-            PublishAction::AlreadyPublished
-        );
-
-        assert_eq!(
-            publish_action(&ours, "bb", PublishMode::Rollover, false),
-            PublishAction::Added
-        );
-        assert_eq!(
-            publish_action(&ours, "bb", PublishMode::Rollover, true),
-            PublishAction::WouldAdd
-        );
-
-        assert_eq!(
-            publish_action(&ours, "bb", PublishMode::Replace, false),
-            PublishAction::Replaced
-        );
-        assert_eq!(
-            publish_action(&ours, "bb", PublishMode::Replace, true),
-            PublishAction::WouldReplace
-        );
-
-        assert_eq!(
-            publish_action(&[], "aa", PublishMode::Replace, false),
-            PublishAction::Added
-        );
-        assert_eq!(
-            publish_action(&[], "aa", PublishMode::Rollover, true),
-            PublishAction::WouldAdd
-        );
-        assert_eq!(
-            publish_action(&[&other], "bb", PublishMode::Replace, false),
-            PublishAction::Added
-        );
-    }
-
-    #[test]
     fn prune_only_stale_dane_ee() {
         let zone = example_zone();
         let expected = expected_names(&zone, Some("mx"), 25);
@@ -878,7 +735,7 @@ mod tests {
         let other_selector = record_data("_25._tcp.mx.example.org", "DD", 3, 0, 1);
 
         let records = [current, stale, other_port, other_selector];
-        let found = stale_tlsa(&records, &expected, "aa");
+        let found = stale_cf_tlsa(&records, &expected, "aa");
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].data.as_ref().map(|data| data.certificate.as_str()),
@@ -886,7 +743,7 @@ mod tests {
         );
 
         let current_only = [record("_25._tcp.mx.example.org", "aa")];
-        let none = stale_tlsa(&current_only, &expected, "AA");
+        let none = stale_cf_tlsa(&current_only, &expected, "AA");
         assert!(none.is_empty());
     }
 
@@ -895,7 +752,8 @@ mod tests {
         let paths = config_paths();
         assert_eq!(paths[0], PathBuf::from("/etc/gentlsa/cloudflare.cfg"));
         assert!(paths.iter().any(|path| {
-            path.file_name().is_some_and(|name| name == "cloudflare.cfg")
+            path.file_name()
+                .is_some_and(|name| name == "cloudflare.cfg")
                 && path
                     .parent()
                     .and_then(|parent| parent.file_name())

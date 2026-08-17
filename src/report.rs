@@ -1,8 +1,10 @@
 use serde::Serialize;
 
 use crate::cert::CertDetails;
-use crate::cloudflare::{ListedTlsa, PruneReport, PublishReport};
+use crate::cloudflare::ListedTlsa;
 use crate::dns::TlsaRecord;
+use crate::nsupdate::ListedTlsa as NsupdateListed;
+use crate::publish::{PruneReport, PublishReport};
 use crate::tlsa;
 
 #[derive(Debug, Serialize)]
@@ -24,6 +26,8 @@ pub enum Report {
         dns: Vec<DnsName>,
         #[serde(skip_serializing_if = "Option::is_none")]
         cloudflare: Option<CloudflareList>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        nsupdate: Option<NsupdateList>,
         #[serde(skip_serializing_if = "Option::is_none")]
         note: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +52,12 @@ pub enum Report {
         #[serde(skip_serializing_if = "Option::is_none")]
         zones: Option<Vec<ZoneRef>>,
     },
+    Nsupdate {
+        server: String,
+        key_name: String,
+        algorithm: String,
+        ttl: u32,
+    },
     File {
         path: String,
         usage: u8,
@@ -59,6 +69,8 @@ pub enum Report {
         records: Vec<FileRecord>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         cloudflare: Vec<PublishReport>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        nsupdate: Vec<PublishReport>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -77,6 +89,8 @@ pub struct GenerateResult {
     pub info: Option<CertDetails>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloudflare: Option<PublishReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nsupdate: Option<PublishReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -102,6 +116,14 @@ pub struct CloudflareList {
 }
 
 #[derive(Debug, Serialize)]
+pub struct NsupdateList {
+    pub server: String,
+    pub records: Vec<JsonTlsa>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct JsonTlsa {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -123,6 +145,8 @@ pub struct PruneResult {
     pub dns: Vec<JsonTlsa>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloudflare: Option<PruneReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nsupdate: Option<PruneReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -185,6 +209,18 @@ impl JsonTlsa {
             status,
         }
     }
+
+    pub fn from_nsupdate(record: &NsupdateListed, status: Option<&'static str>) -> Self {
+        Self {
+            id: None,
+            name: Some(record.name.clone()),
+            usage: record.usage,
+            selector: record.selector,
+            matching: record.matching,
+            certificate: record.certificate.clone(),
+            status,
+        }
+    }
 }
 
 impl GenerateResult {
@@ -205,6 +241,7 @@ impl GenerateResult {
             certificate: hash,
             info,
             cloudflare: None,
+            nsupdate: None,
             error: None,
         }
     }
@@ -282,6 +319,7 @@ mod tests {
                 owner: tlsa::owner_name(443, None),
             }],
             cloudflare: Vec::new(),
+            nsupdate: Vec::new(),
             error: None,
         };
         let value = serde_json::to_value(&report).unwrap();
@@ -373,6 +411,7 @@ mod tests {
         assert_eq!(value["results"][0]["matching"], 1);
         assert_eq!(value["results"][0]["certificate"], hash);
         assert!(value["results"][0].get("cloudflare").is_none());
+        assert!(value["results"][0].get("nsupdate").is_none());
         assert!(value["results"][0].get("error").is_none());
         assert!(value["results"][0].get("info").is_none());
     }
