@@ -235,6 +235,13 @@ are accepted as aliases.
 and
 .Sy key_file
 can point at an Azure service-principal JSON file.
+Such a file carries no resource group or TTL, so
+.Sy resource_group
+and
+.Sy ttl
+are still read from this file alongside it.
+A configured credentials path that does not exist is an error, not a
+silent fallback to the other keys.
 .Sy resource_group
 is optional; when omitted,
 .Nm

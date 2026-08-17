@@ -2182,16 +2182,23 @@ async fn azure_cmd(info: bool, listzones: bool) -> Result<u8> {
     let azure = Azure::from_env_or_config()
         .context("Please configure Azure DNS in /etc/gentlsa/azure.cfg")?;
 
-    let (auth, subscription) = if info {
+    let (auth, subscription, resource_group) = if info {
         output::text(">>> Azure DNS Information:");
         output::text(format!("Auth: {}", azure.auth_label()));
         output::text(format!("Subscription: {}", azure.subscription()));
+        output::text(format!(
+            "Resource group: {}",
+            azure
+                .resource_group()
+                .unwrap_or("(none: searching the whole subscription)")
+        ));
         (
             Some(azure.auth_label()),
             Some(azure.subscription().to_string()),
+            azure.resource_group().map(str::to_string),
         )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let zones = if show_zones {
@@ -2216,6 +2223,7 @@ async fn azure_cmd(info: bool, listzones: bool) -> Result<u8> {
         output::emit(&Report::Azure {
             auth,
             subscription,
+            resource_group,
             zones,
         })?;
     }

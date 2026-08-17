@@ -90,6 +90,8 @@ pub enum Report {
         #[serde(skip_serializing_if = "Option::is_none")]
         subscription: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        resource_group: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         zones: Option<Vec<ZoneRef>>,
     },
     Rollover {

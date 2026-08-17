@@ -554,7 +554,19 @@ ttl = 3600
 
 `resource_group` is optional. When it is set, zone lookup is limited to that group. When it is omitted, gentlsa lists every DNS zone in the subscription.
 
-`credentials` can point at an Azure service-principal JSON file (`az ad sp create-for-rbac` / SDK-auth shape). Environment variables override the config file:
+`credentials` can point at an Azure service-principal JSON file (`az ad sp create-for-rbac` / SDK-auth shape). A key file carries no resource group or TTL, so `resource_group` and `ttl` are still read from the config file alongside it. A `credentials` path that does not exist is an error rather than a silent fallback to the other keys.
+
+`gentlsa azure --info` prints the resource group in effect, which is the quickest way to check whether lookups are scoped to a group or searching the whole subscription:
+
+```
+$ gentlsa azure --info
+>>> Azure DNS Information:
+Auth: service principal 1a2b3c4d…
+Subscription: 00000000-0000-0000-0000-000000000000
+Resource group: dns-rg
+```
+
+Environment variables override the config file:
 
 | Variable | Use |
 |----------|-----|

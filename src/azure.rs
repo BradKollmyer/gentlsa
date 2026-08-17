@@ -177,6 +177,12 @@ impl Client {
         &self.subscription
     }
 
+    /// Configured resource group, if any. Without one, zone lookups fall back
+    /// to a subscription-wide list, which a scoped service principal cannot do.
+    pub fn resource_group(&self) -> Option<&str> {
+        self.resource_group.as_deref()
+    }
+
     pub async fn list_zones(&self) -> Result<Vec<DnsZone>> {
         let mut zones = Vec::new();
         let mut url = Some(if let Some(rg) = &self.resource_group {
@@ -702,8 +708,13 @@ fn load_credential_file() -> Result<Option<FileCreds>> {
     if let Some(path) = env_value(&["GENTLSA_AZURE_CREDENTIALS", "AZURE_CREDENTIALS"])
         .map(PathBuf::from)
         .or_else(config_credential_path)
-        && path.exists()
     {
+        // A credentials file is only ever named explicitly, so a missing one is
+        // a misconfiguration. Falling back to the ini here would report
+        // "set AZURE_TENANT_ID" and hide the real problem (usually a typo).
+        if !path.exists() {
+            bail!("Azure credentials file {} does not exist", path.display());
+        }
         return Ok(Some(creds_from_json(&path)?));
     }
     load_ini_credentials()
@@ -730,7 +741,10 @@ fn creds_from_json(path: &PathBuf) -> Result<FileCreds> {
         client_id: nonempty(parsed.client_id),
         client_secret: nonempty(parsed.client_secret),
         subscription: nonempty(parsed.subscription_id),
-        resource_group: None,
+        // A service-principal key file has no resource group, but the config
+        // file documents `credentials` and `resource_group` side by side, so
+        // take it (and the TTL) from there.
+        resource_group: config_resource_group(),
         ttl: config_ttl(),
     })
 }
@@ -793,6 +807,15 @@ fn config_credential_path() -> Option<PathBuf> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+fn config_resource_group() -> Option<String> {
+    let (conf, _) = config_ini()?;
+    let section = azure_section(&conf)?;
+    section_get(
+        section,
+        &["resource_group", "resource-group", "resourceGroup"],
+    )
 }
 
 fn config_ttl() -> Option<u32> {
