@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `--mx` DNSSEC-validates the MX RRset itself, not just the TLSA records (RFC 7672 §2.2). A forged insecure MX answer lets an attacker choose the host and then publish a properly signed TLSA for a key they hold, so `verify --mx` reports an unauthenticated MX RRset as WARNING and a bogus one as CRITICAL even when the TLSA records validate; `generate --mx` and `prune --mx` warn on stderr. `--no-dnssec-check` skips it, and `verify --json` reports the verdict in `mx_dnssec`
 - `--mx` on `generate`, `verify`, and `prune` looks up the zone's MX RRset and operates on each exchange host (lowest preference first), so DANE-for-mail does not need a `--hostname` per MX. Out-of-zone exchanges are checked but cannot be published into the zone. Null MX (RFC 7505) is skipped
 - `--timeout <SECONDS>` (default 30) is an overall deadline for connect, socket I/O, and DNS, so Nagios `verify` can finish before the service check timeout. TCP connect was previously unbounded
 - `--starttls smtp|imap|pop3|xmpp|none` selects the plaintext upgrade independently of the port on `generate`, `verify`, `list`, `prune`, and `rollover`. When omitted, 25/587 are SMTP, 143 IMAP, 110 POP3, and 5222/5269 XMPP; every other port stays implicit TLS. `--starttls none` forces implicit TLS on a STARTTLS port

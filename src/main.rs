@@ -28,9 +28,10 @@ use crate::google::Client as Google;
 use crate::nsupdate::Config as Nsupdate;
 use crate::publish::{PublishMode, PublishReport, PublisherKind};
 use crate::report::{
-    CloudflareList, DnsName, FileRecord, GenerateResult, JsonTlsa, LiveHash, NsupdateList,
-    ProviderList, PruneResult, ReloadReport, Report, ResumeJob, RolloverPublish, VerifyResult,
-    ZoneRef, apply_dnssec, apply_expiry, expiry_phrase, verify_outcome, worst_verify_exit,
+    CloudflareList, DnsName, DnssecSubject, FileRecord, GenerateResult, JsonTlsa, LiveHash,
+    NsupdateList, ProviderList, PruneResult, ReloadReport, Report, ResumeJob, RolloverPublish,
+    VerifyResult, ZoneRef, apply_dnssec, apply_expiry, expiry_phrase, verify_outcome,
+    worst_verify_exit,
 };
 use crate::route53::Client as Route53;
 use crate::tlsa::{HostTarget, StarttlsProto, TlsaParams, connect_host, fqdn};
@@ -76,13 +77,15 @@ async fn run() -> Result<u8> {
             require_default_params_for_publish(params, &publisher)?;
             let starttls = starttls.proto();
             let mx = mx.mx;
-            let targets = match resolve_targets(&zone, hostname.as_deref(), mx).await {
+            let targets = match resolve_targets(&zone, hostname.as_deref(), mx, true).await {
                 Ok(targets) => targets,
                 Err(err) => {
                     eprintln!("{err:#}");
                     return Ok(1);
                 }
             };
+            warn_if_mx_unsigned(&zone, targets.mx_dnssec);
+            let targets = targets.hosts;
             require_targets_in_zone_for_publish(&zone, &targets, &publisher)?;
             let mut code = 0;
             let mut results = Vec::new();
@@ -142,13 +145,15 @@ async fn run() -> Result<u8> {
             let starttls = starttls.proto();
             let mx = mx.mx;
             let publisher_kind = publisher.kind();
-            let targets = match resolve_targets(&zone, hostname.as_deref(), mx).await {
+            let targets = match resolve_targets(&zone, hostname.as_deref(), mx, true).await {
                 Ok(targets) => targets,
                 Err(err) => {
                     eprintln!("{err:#}");
                     return Ok(1);
                 }
             };
+            warn_if_mx_unsigned(&zone, targets.mx_dnssec);
+            let targets = targets.hosts;
             if publisher_kind.is_some() {
                 for target in &targets {
                     if !target.in_zone(&zone) {
@@ -258,23 +263,26 @@ async fn run() -> Result<u8> {
             let expiry = (!no_expiry_check).then_some((warn, critical));
             let starttls = starttls.proto();
             let mx = mx.mx;
-            let targets = match resolve_targets(&zone, hostname.as_deref(), mx).await {
-                Ok(targets) => targets,
-                Err(err) => {
-                    eprintln!("{err:#}");
-                    output::text("UNKNOWN - Something went wrong. Check logs");
-                    if output::is_json() {
-                        output::emit(&Report::Verify {
-                            zone,
-                            hostname,
-                            mx,
-                            results: Vec::new(),
-                            exit: 3,
-                        })?;
+            let targets =
+                match resolve_targets(&zone, hostname.as_deref(), mx, !no_dnssec_check).await {
+                    Ok(targets) => targets,
+                    Err(err) => {
+                        eprintln!("{err:#}");
+                        output::text("UNKNOWN - Something went wrong. Check logs");
+                        if output::is_json() {
+                            output::emit(&Report::Verify {
+                                zone,
+                                hostname,
+                                mx,
+                                results: Vec::new(),
+                                exit: 3,
+                            })?;
+                        }
+                        return Ok(3);
                     }
-                    return Ok(3);
-                }
-            };
+                };
+            let mx_dnssec = targets.mx_dnssec;
+            let targets = targets.hosts;
             let ports = ports.as_slice();
             let multi_port = ports.len() > 1;
             let multi_host = targets.len() > 1;
@@ -298,6 +306,7 @@ async fn run() -> Result<u8> {
                             !no_dnssec_check,
                             starttls,
                             mx.then(|| target.connect_host()),
+                            mx_dnssec,
                         )
                         .await,
                     );
@@ -415,26 +424,59 @@ async fn run() -> Result<u8> {
 
 /// The publishers' rollover/replace/prune logic only understands 3 1 1, so
 /// refuse to publish anything else rather than silently writing wrong params.
-async fn resolve_targets(zone: &str, hostname: Option<&str>, mx: bool) -> Result<Vec<HostTarget>> {
+/// Hosts to operate on, plus the DNSSEC verdict for the MX RRset they came from
+/// (`None` without `--mx`, or when validation was skipped).
+struct Targets {
+    hosts: Vec<HostTarget>,
+    mx_dnssec: Option<dns::DnssecStatus>,
+}
+
+async fn resolve_targets(
+    zone: &str,
+    hostname: Option<&str>,
+    mx: bool,
+    dnssec_check: bool,
+) -> Result<Targets> {
     if !mx {
-        return Ok(vec![HostTarget::from_label(zone, hostname)]);
+        return Ok(Targets {
+            hosts: vec![HostTarget::from_label(zone, hostname)],
+            mx_dnssec: None,
+        });
     }
-    let records = dns::lookup_mx(zone).await?;
-    if records.is_empty() {
+    let lookup = dns::lookup_mx(zone, dnssec_check).await?;
+    if lookup.hosts.is_empty() {
         anyhow::bail!("no MX records for {zone}");
     }
     verbose::step(format_args!(
         "MX hosts: {}",
-        records
+        lookup
+            .hosts
             .iter()
             .map(|mx| format!("{} ({})", mx.host, mx.preference))
             .collect::<Vec<_>>()
             .join(", ")
     ));
-    Ok(records
-        .iter()
-        .map(|mx| HostTarget::from_mx(zone, &mx.host))
-        .collect())
+    Ok(Targets {
+        hosts: lookup
+            .hosts
+            .iter()
+            .map(|mx| HostTarget::from_mx(zone, &mx.host))
+            .collect(),
+        mx_dnssec: lookup.dnssec,
+    })
+}
+
+/// Warn when the MX RRset that chose these hosts was not DNSSEC-authenticated:
+/// publishing TLSA for an attacker-selectable MX buys nothing (RFC 7672 §2.2).
+fn warn_if_mx_unsigned(zone: &str, mx_dnssec: Option<dns::DnssecStatus>) {
+    match mx_dnssec {
+        Some(dns::DnssecStatus::Secure) | None => {}
+        Some(status) => eprintln!(
+            "warning: the MX RRset for {zone} is not DNSSEC-authenticated ({}); \
+             DANE clients cannot trust these MX names",
+            status.label()
+        ),
+    }
 }
 
 fn require_targets_in_zone_for_publish(
@@ -1603,6 +1645,7 @@ async fn verify(
     dnssec_check: bool,
     starttls: Option<StarttlsProto>,
     host_label: Option<String>,
+    mx_dnssec: Option<dns::DnssecStatus>,
 ) -> VerifyResult {
     let say = |msg: &str| {
         if output::is_json() {
@@ -1620,7 +1663,11 @@ async fn verify(
                 dns: Vec<JsonTlsa>,
                 info: Option<CertDetails>,
                 dnssec: Option<dns::DnssecStatus>| {
-        let outcome = verify_outcome(live.as_deref(), &[], &[]);
+        let outcome = apply_dnssec(
+            verify_outcome(live.as_deref(), &[], &[]),
+            mx_dnssec,
+            DnssecSubject::Mx,
+        );
         say(&outcome.message);
         VerifyResult {
             port,
@@ -1634,6 +1681,7 @@ async fn verify(
             info,
             expires_in_days: None,
             dnssec,
+            mx_dnssec,
         }
     };
 
@@ -1762,7 +1810,8 @@ async fn verify(
             critical,
         );
     }
-    outcome = apply_dnssec(outcome, dnssec);
+    outcome = apply_dnssec(outcome, dnssec, DnssecSubject::Tlsa);
+    outcome = apply_dnssec(outcome, mx_dnssec, DnssecSubject::Mx);
     say(&outcome.message);
     VerifyResult {
         port,
@@ -1776,6 +1825,7 @@ async fn verify(
         info: info_block,
         expires_in_days: Some(lifetime.days_left),
         dnssec,
+        mx_dnssec,
     }
 }
 

@@ -152,17 +152,35 @@ pub struct MxHost {
     pub host: String,
 }
 
+pub struct MxLookup {
+    pub hosts: Vec<MxHost>,
+    /// `None` when validation was skipped or the zone has no MX records.
+    pub dnssec: Option<DnssecStatus>,
+}
+
 /// Look up MX for `zone`, lowest preference first. Null MX (RFC 7505, target ".")
 /// is dropped. Duplicate targets keep the lowest preference.
-pub async fn lookup_mx(zone: &str) -> Result<Vec<MxHost>> {
+///
+/// With `validate`, the MX RRset is DNSSEC-validated and the verdict returned.
+/// SMTP DANE is only meaningful over a secure MX RRset (RFC 7672 §2.2): an
+/// attacker who can forge an insecure MX response chooses the hostname, and can
+/// then publish a legitimately signed TLSA record at that name for a key it owns.
+pub async fn lookup_mx(zone: &str, validate: bool) -> Result<MxLookup> {
     let name = format!("{}.", zone.trim_end_matches('.'));
-    verbose::step(format_args!("DNS MX lookup {name}"));
-    let resolver = build_resolver(false)?;
+    if validate {
+        verbose::step(format_args!("DNS MX lookup {name} (DNSSEC validation)"));
+    } else {
+        verbose::step(format_args!("DNS MX lookup {name}"));
+    }
+    let resolver = build_resolver(validate)?;
     let lookup = match dns_timeout(resolver.lookup(name.clone(), RecordType::MX)).await? {
         Ok(lookup) => lookup,
         Err(err) if err.is_no_records_found() => {
             verbose::step("DNS returned 0 MX record(s)");
-            return Ok(Vec::new());
+            return Ok(MxLookup {
+                hosts: Vec::new(),
+                dnssec: None,
+            });
         }
         Err(err) => {
             verbose::step(format_args!("MX lookup failed: {err}"));
@@ -171,10 +189,12 @@ pub async fn lookup_mx(zone: &str) -> Result<Vec<MxHost>> {
     };
 
     let mut records = Vec::new();
+    let mut proofs = Vec::new();
     for answer in lookup.answers() {
         let RData::MX(mx) = &answer.data else {
             continue;
         };
+        proofs.push(DnssecStatus::from_proof(answer.proof));
         let host = mx.exchange.to_string();
         let host = host.trim_end_matches('.');
         if host.is_empty() {
@@ -187,8 +207,13 @@ pub async fn lookup_mx(zone: &str) -> Result<Vec<MxHost>> {
         records.push((mx.preference, host.to_string()));
     }
     let hosts = normalize_mx(records);
-    verbose::step(format_args!("DNS returned {} MX host(s)", hosts.len()));
-    Ok(hosts)
+    let dnssec = validate.then(|| worst_dnssec(proofs)).flatten();
+    verbose::step(format_args!(
+        "DNS returned {} MX host(s), DNSSEC {}",
+        hosts.len(),
+        dnssec.map_or("n/a", DnssecStatus::label)
+    ));
+    Ok(MxLookup { hosts, dnssec })
 }
 
 fn normalize_mx(records: Vec<(u16, String)>) -> Vec<MxHost> {

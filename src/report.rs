@@ -263,6 +263,9 @@ pub struct VerifyResult {
     pub expires_in_days: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dnssec: Option<DnssecStatus>,
+    /// DNSSEC verdict for the zone's MX RRset; only set under `--mx`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mx_dnssec: Option<DnssecStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -540,7 +543,11 @@ pub fn apply_expiry(
 /// an unauthenticated RRset is WARNING (DANE is inert without DNSSEC).
 /// A worse verdict already present (hash mismatch, expiry CRITICAL, UNKNOWN)
 /// keeps its message; DNSSEC never improves an outcome.
-pub fn apply_dnssec(outcome: VerifyOutcome, dnssec: Option<DnssecStatus>) -> VerifyOutcome {
+pub fn apply_dnssec(
+    outcome: VerifyOutcome,
+    dnssec: Option<DnssecStatus>,
+    subject: DnssecSubject,
+) -> VerifyOutcome {
     let Some(dnssec) = dnssec else {
         return outcome;
     };
@@ -548,20 +555,41 @@ pub fn apply_dnssec(outcome: VerifyOutcome, dnssec: Option<DnssecStatus>) -> Ver
         DnssecStatus::Secure => outcome,
         DnssecStatus::Bogus if outcome.exit != 2 && outcome.exit != 3 => VerifyOutcome {
             status: "critical",
-            message: "CRITICAL - TLSA records failed DNSSEC validation (bogus)".into(),
+            message: format!(
+                "CRITICAL - {} records failed DNSSEC validation (bogus)",
+                subject.label()
+            ),
             exit: 2,
         },
         DnssecStatus::Insecure | DnssecStatus::Indeterminate if outcome.exit == 0 => {
             VerifyOutcome {
                 status: "warning",
                 message: format!(
-                    "WARNING - TLSA records are not DNSSEC-authenticated ({})",
+                    "WARNING - {} records are not DNSSEC-authenticated ({})",
+                    subject.label(),
                     dnssec.label()
                 ),
                 exit: 1,
             }
         }
         _ => outcome,
+    }
+}
+
+/// Which RRset a DNSSEC verdict describes. SMTP DANE needs both to be secure:
+/// the MX RRset picks the host, the TLSA RRset pins its key (RFC 7672 §2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnssecSubject {
+    Tlsa,
+    Mx,
+}
+
+impl DnssecSubject {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Tlsa => "TLSA",
+            Self::Mx => "MX",
+        }
     }
 }
 
@@ -782,23 +810,31 @@ mod tests {
     fn apply_dnssec_verdicts() {
         let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")], &[Some(true)]);
 
-        let secure = apply_dnssec(ok.clone(), Some(DnssecStatus::Secure));
+        let secure = apply_dnssec(ok.clone(), Some(DnssecStatus::Secure), DnssecSubject::Tlsa);
         assert_eq!((secure.status, secure.exit), ("ok", 0));
 
-        let skipped = apply_dnssec(ok.clone(), None);
+        let skipped = apply_dnssec(ok.clone(), None, DnssecSubject::Tlsa);
         assert_eq!(skipped.exit, 0);
 
-        let insecure = apply_dnssec(ok.clone(), Some(DnssecStatus::Insecure));
+        let insecure = apply_dnssec(
+            ok.clone(),
+            Some(DnssecStatus::Insecure),
+            DnssecSubject::Tlsa,
+        );
         assert_eq!((insecure.status, insecure.exit), ("warning", 1));
         assert_eq!(
             insecure.message,
             "WARNING - TLSA records are not DNSSEC-authenticated (insecure)"
         );
 
-        let indeterminate = apply_dnssec(ok.clone(), Some(DnssecStatus::Indeterminate));
+        let indeterminate = apply_dnssec(
+            ok.clone(),
+            Some(DnssecStatus::Indeterminate),
+            DnssecSubject::Tlsa,
+        );
         assert_eq!((indeterminate.status, indeterminate.exit), ("warning", 1));
 
-        let bogus = apply_dnssec(ok, Some(DnssecStatus::Bogus));
+        let bogus = apply_dnssec(ok, Some(DnssecStatus::Bogus), DnssecSubject::Tlsa);
         assert_eq!((bogus.status, bogus.exit), ("critical", 2));
         assert_eq!(
             bogus.message,
@@ -810,26 +846,68 @@ mod tests {
     fn apply_dnssec_does_not_hide_worse_verdicts() {
         // A hash mismatch keeps its ERROR message even when the RRset is bogus.
         let err = verify_outcome(Some("aabbcc"), &[tlsa("dddddd")], &[Some(false)]);
-        let still = apply_dnssec(err, Some(DnssecStatus::Bogus));
+        let still = apply_dnssec(err, Some(DnssecStatus::Bogus), DnssecSubject::Tlsa);
         assert_eq!((still.status, still.exit), ("error", 2));
         assert!(still.message.contains("ERROR - TLSA invalid"));
 
         // UNKNOWN stays UNKNOWN: without records there is nothing to judge.
         let unknown = verify_outcome(None, &[], &[]);
-        let still_unknown = apply_dnssec(unknown, Some(DnssecStatus::Bogus));
+        let still_unknown = apply_dnssec(unknown, Some(DnssecStatus::Bogus), DnssecSubject::Tlsa);
         assert_eq!(still_unknown.exit, 3);
 
         // An expiry WARNING keeps its message, but bogus still escalates it.
         let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")], &[Some(true)]);
         let warn = apply_expiry(ok, 10, false, 14, 7);
-        let insecure_warn = apply_dnssec(warn.clone(), Some(DnssecStatus::Insecure));
+        let insecure_warn = apply_dnssec(
+            warn.clone(),
+            Some(DnssecStatus::Insecure),
+            DnssecSubject::Tlsa,
+        );
         assert_eq!(insecure_warn.exit, 1);
         assert_eq!(
             insecure_warn.message,
             "WARNING - certificate expires in 10 days"
         );
-        let bogus_warn = apply_dnssec(warn, Some(DnssecStatus::Bogus));
+        let bogus_warn = apply_dnssec(warn, Some(DnssecStatus::Bogus), DnssecSubject::Tlsa);
         assert_eq!((bogus_warn.status, bogus_warn.exit), ("critical", 2));
+    }
+
+    #[test]
+    fn apply_dnssec_mx_subject() {
+        let ok = verify_outcome(Some("aabbcc"), &[tlsa("AABBCC")], &[Some(true)]);
+
+        // A secure TLSA RRset under an unsigned MX RRset is still not trustworthy:
+        // the attacker picks the host, then signs a TLSA for a key they own.
+        let insecure = apply_dnssec(ok.clone(), Some(DnssecStatus::Insecure), DnssecSubject::Mx);
+        assert_eq!((insecure.status, insecure.exit), ("warning", 1));
+        assert_eq!(
+            insecure.message,
+            "WARNING - MX records are not DNSSEC-authenticated (insecure)"
+        );
+
+        let bogus = apply_dnssec(ok.clone(), Some(DnssecStatus::Bogus), DnssecSubject::Mx);
+        assert_eq!((bogus.status, bogus.exit), ("critical", 2));
+        assert_eq!(
+            bogus.message,
+            "CRITICAL - MX records failed DNSSEC validation (bogus)"
+        );
+
+        // Secure MX, or no --mx at all, leaves the verdict alone.
+        assert_eq!(
+            apply_dnssec(ok.clone(), Some(DnssecStatus::Secure), DnssecSubject::Mx).exit,
+            0
+        );
+        assert_eq!(apply_dnssec(ok.clone(), None, DnssecSubject::Mx).exit, 0);
+
+        // A TLSA warning already applied is not downgraded by a secure MX, and an
+        // insecure MX does not double-report on top of a TLSA warning.
+        let tlsa_warn = apply_dnssec(ok, Some(DnssecStatus::Insecure), DnssecSubject::Tlsa);
+        let both = apply_dnssec(tlsa_warn, Some(DnssecStatus::Insecure), DnssecSubject::Mx);
+        assert_eq!(both.exit, 1);
+        assert_eq!(
+            both.message,
+            "WARNING - TLSA records are not DNSSEC-authenticated (insecure)"
+        );
     }
 
     #[test]
@@ -894,6 +972,7 @@ mod tests {
             info: None,
             expires_in_days: Some(90),
             dnssec: Some(DnssecStatus::Secure),
+            mx_dnssec: None,
         };
 
         let stale = [tlsa("cccc")];
@@ -910,6 +989,7 @@ mod tests {
             info: None,
             expires_in_days: Some(2),
             dnssec: None,
+            mx_dnssec: None,
         };
 
         let report = Report::Verify {

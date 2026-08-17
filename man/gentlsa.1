@@ -249,6 +249,10 @@ host.
 Conflicts with
 .Fl -hostname .
 An MX outside the zone is printed but cannot be published here.
+The MX RRset is DNSSEC-validated; an unauthenticated one warns on
+stderr, because a forged MX answer lets an attacker choose the host
+whose key you would then pin
+.Pq RFC 7672 Sy \(sc2.2 .
 .It Fl -starttls Ar proto
 STARTTLS protocol
 .Pq Sy smtp , imap , pop3 , xmpp ,
@@ -428,6 +432,11 @@ Short hostname without the zone.
 Look up the zone's MX records and verify each exchange host.
 Conflicts with
 .Fl -hostname .
+The MX RRset is DNSSEC-validated as well as the TLSA records: an
+unauthenticated MX RRset is WARNING and a bogus one is CRITICAL, even
+when the TLSA records themselves validate, because whoever forges the
+MX answer picks the host and can sign a TLSA for a key they hold
+.Pq RFC 7672 Sy \(sc2.2 .
 The overall exit is the worst result.
 .It Fl -starttls Ar proto
 STARTTLS protocol used to fetch the live certificate, as in
@@ -580,13 +589,13 @@ days.
 WARNING.
 Hash matches, days left less than or equal to
 .Fl -warn ,
-or the TLSA records are not DNSSEC-authenticated.
+or the TLSA or MX records are not DNSSEC-authenticated.
 .It 2
 CRITICAL.
 Hash matches but the cert is expired, not yet valid, or expires
 within
 .Fl -critical
-days, or the TLSA records failed DNSSEC validation
+days, or the TLSA or MX records failed DNSSEC validation
 .Pq bogus ;
 or ERROR, DNS has TLSA records and none match.
 .It 3

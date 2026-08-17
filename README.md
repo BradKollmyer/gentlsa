@@ -112,6 +112,8 @@ gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] file <CERTFILE> [--zone <Z
 
 `--mx` looks up the zone's MX records and runs the command on each exchange host (lowest preference first). Conflicts with `--hostname`. Port 25 is the usual DANE SMTP port. An MX that lives in another zone is still verified or printed; publishing its TLSA into this zone is refused. A null MX (RFC 7505) is skipped.
 
+The MX RRset is itself DNSSEC-validated. SMTP DANE only means something over a secure MX RRset (RFC 7672 §2.2): whoever can forge an insecure MX answer picks the hostname you connect to, and can then publish a properly signed TLSA record at that name for a key they hold — every per-host check would report `secure` while the attacker chose the host. So `verify --mx` treats an unauthenticated MX RRset as WARNING and a bogus one as CRITICAL, even when the TLSA records themselves validate; `--no-dnssec-check` skips both checks. `generate --mx` and `prune --mx` print a warning on stderr instead.
+
 ```
 $ gentlsa verify example.com 25 --mx
 mail.example.com: OK - TLSA is valid
@@ -212,10 +214,12 @@ The TLSA records are also validated with DNSSEC (locally, from the root trust an
 | 0 | `OK - TLSA is valid` | At least one DNS TLSA hash matches, and the cert expires after `--warn` days |
 | 1 | `WARNING - certificate expires in N days` | Hash matches, days left ≤ `--warn` |
 | 1 | `WARNING - TLSA records are not DNSSEC-authenticated (insecure)` | Hash matches, but the zone is not DNSSEC-signed, so DANE clients ignore the records |
+| 1 | `WARNING - MX records are not DNSSEC-authenticated (insecure)` | `--mx` only: the TLSA records check out, but the MX RRset that chose the host is unsigned |
 | 2 | `CRITICAL - certificate expires in N days` | Hash matches, days left ≤ `--critical` (`expires in 1 day` / `expires today` near zero) |
 | 2 | `CRITICAL - certificate expired` | Hash matches, `notAfter` has passed |
 | 2 | `CRITICAL - certificate is not yet valid` | Hash matches, `notBefore` has not been reached |
 | 2 | `CRITICAL - TLSA records failed DNSSEC validation (bogus)` | The TLSA RRset does not validate; validating resolvers SERVFAIL on it |
+| 2 | `CRITICAL - MX records failed DNSSEC validation (bogus)` | `--mx` only: the MX RRset does not validate |
 | 2 | `ERROR - TLSA invalid: ...` | DNS has TLSA records, none match |
 | 3 | `UNKNOWN - Something went wrong. Check logs` | Lookup or connection failed |
 
@@ -226,7 +230,7 @@ $ gentlsa verify www.freebsd.org 443
 OK - TLSA is valid
 ```
 
-`--info` prints the live certificate before the OK/WARNING/CRITICAL/ERROR/UNKNOWN line. In JSON, each result's `status` is `ok`, `warning`, `critical` (expiry or bogus DNSSEC), `error` (TLSA mismatch), or `unknown`, `expires_in_days` is included when the result was computed from a fetched live certificate (it is omitted on failed lookups, connections, and parses), and `dnssec` is the validation verdict (`secure`, `insecure`, `bogus`, or `indeterminate`; omitted with `--no-dnssec-check` and on failed lookups).
+`--info` prints the live certificate before the OK/WARNING/CRITICAL/ERROR/UNKNOWN line. In JSON, each result's `status` is `ok`, `warning`, `critical` (expiry or bogus DNSSEC), `error` (TLSA mismatch), or `unknown`, `expires_in_days` is included when the result was computed from a fetched live certificate (it is omitted on failed lookups, connections, and parses), `mx_dnssec` is the MX RRset's verdict under `--mx`, and `dnssec` is the TLSA validation verdict (`secure`, `insecure`, `bogus`, or `indeterminate`; omitted with `--no-dnssec-check` and on failed lookups).
 
 ### list
 
