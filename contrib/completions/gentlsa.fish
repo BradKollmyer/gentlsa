@@ -52,6 +52,7 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l usage -d 'T
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l selector -d 'TLSA selector: 0 full certificate, 1 SubjectPublicKeyInfo' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l matching -d 'TLSA matching type: 0 exact, 1 SHA2-256, 2 SHA2-512' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l mx -d 'Look up the zone\'s MX RRset and operate on each exchange host'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l info -d 'Print certificate details'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
@@ -86,6 +87,7 @@ pop3\t''
 xmpp\t''
 none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l mx -d 'Look up the zone\'s MX RRset and operate on each exchange host'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l cloudflare -d 'Publish / list / prune via the Cloudflare API'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l nsupdate -d 'Publish via RFC 2136 dynamic update (TSIG)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand prune" -l route53 -d 'Publish / list / prune via Amazon Route 53'
@@ -125,6 +127,7 @@ none\t'Implicit TLS; skip STARTTLS even on ports that default to it'"
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l warn -d 'Warn when the live certificate expires in this many days or fewer' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l critical -d 'Critical when the live certificate expires in this many days or fewer' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l timeout -d 'Overall deadline in seconds for connect, I/O, and DNS (default 30)' -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l mx -d 'Look up the zone\'s MX RRset and operate on each exchange host'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l info
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l no-expiry-check -d 'Check the TLSA hash only, ignoring certificate expiry (pre-0.4.1 behavior)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand verify" -l no-dnssec-check -d 'Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)'

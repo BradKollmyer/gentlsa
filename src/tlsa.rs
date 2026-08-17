@@ -115,6 +115,51 @@ pub fn connect_host(zone: &str, hostname: Option<&str>) -> String {
     }
 }
 
+/// A zone plus optional relative hostname, used to build TLSA owners and connect names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostTarget {
+    pub zone: String,
+    pub hostname: Option<String>,
+}
+
+impl HostTarget {
+    pub fn from_label(zone: &str, hostname: Option<&str>) -> Self {
+        let hostname = hostname
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(str::to_string);
+        Self {
+            zone: zone.trim_end_matches('.').to_string(),
+            hostname,
+        }
+    }
+
+    /// Place an MX target in `zone` when it is a name under that zone;
+    /// otherwise treat the MX FQDN as its own apex (out-of-zone exchange).
+    pub fn from_mx(zone: &str, mx_host: &str) -> Self {
+        let zone = zone.trim_end_matches('.');
+        let mx = mx_host.trim_end_matches('.');
+        let zone_l = zone.to_ascii_lowercase();
+        let mx_l = mx.to_ascii_lowercase();
+        if mx_l == zone_l {
+            return Self::from_label(zone, None);
+        }
+        let suffix = format!(".{zone_l}");
+        if let Some(rel) = mx_l.strip_suffix(&suffix).filter(|rel| !rel.is_empty()) {
+            return Self::from_label(zone, Some(rel));
+        }
+        Self::from_label(mx, None)
+    }
+
+    pub fn connect_host(&self) -> String {
+        connect_host(&self.zone, self.hostname.as_deref())
+    }
+
+    pub fn in_zone(&self, zone: &str) -> bool {
+        self.zone.eq_ignore_ascii_case(zone.trim_end_matches('.'))
+    }
+}
+
 /// Port from a TLSA owner name such as `_25._tcp.mx.example.org`.
 pub fn port_from_owner(name: &str) -> Option<u16> {
     let name = name.trim_end_matches('.');
@@ -239,6 +284,33 @@ mod tests {
         );
         assert_eq!(connect_host("example.org", None), "example.org");
         assert_eq!(connect_host("example.org", Some("mx")), "mx.example.org");
+    }
+
+    #[test]
+    fn host_target_from_mx() {
+        let in_zone = HostTarget::from_mx("example.com.", "mail.example.com");
+        assert_eq!(in_zone.zone, "example.com");
+        assert_eq!(in_zone.hostname.as_deref(), Some("mail"));
+        assert_eq!(in_zone.connect_host(), "mail.example.com");
+        assert!(in_zone.in_zone("example.com"));
+
+        let nested = HostTarget::from_mx("example.com", "a.b.example.com");
+        assert_eq!(nested.hostname.as_deref(), Some("a.b"));
+        assert_eq!(nested.connect_host(), "a.b.example.com");
+
+        let apex = HostTarget::from_mx("example.com", "EXAMPLE.COM.");
+        assert!(apex.hostname.is_none());
+        assert_eq!(apex.connect_host(), "example.com");
+
+        let outside = HostTarget::from_mx("example.com", "aspmx.l.google.com.");
+        assert_eq!(outside.zone, "aspmx.l.google.com");
+        assert!(outside.hostname.is_none());
+        assert_eq!(outside.connect_host(), "aspmx.l.google.com");
+        assert!(!outside.in_zone("example.com"));
+
+        let not_suffix = HostTarget::from_mx("example.com", "notexample.com");
+        assert_eq!(not_suffix.zone, "notexample.com");
+        assert!(!not_suffix.in_zone("example.com"));
     }
 
     #[test]

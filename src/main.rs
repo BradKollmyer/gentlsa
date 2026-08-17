@@ -33,7 +33,7 @@ use crate::report::{
     ZoneRef, apply_dnssec, apply_expiry, expiry_phrase, verify_outcome, worst_verify_exit,
 };
 use crate::route53::Client as Route53;
-use crate::tlsa::{StarttlsProto, TlsaParams, connect_host, fqdn};
+use crate::tlsa::{HostTarget, StarttlsProto, TlsaParams, connect_host, fqdn};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -63,6 +63,7 @@ async fn run() -> Result<u8> {
             zone,
             ports,
             hostname,
+            mx,
             info,
             starttls,
             params,
@@ -74,26 +75,38 @@ async fn run() -> Result<u8> {
             let params = params.params();
             require_default_params_for_publish(params, &publisher)?;
             let starttls = starttls.proto();
+            let mx = mx.mx;
+            let targets = match resolve_targets(&zone, hostname.as_deref(), mx).await {
+                Ok(targets) => targets,
+                Err(err) => {
+                    eprintln!("{err:#}");
+                    return Ok(1);
+                }
+            };
+            require_targets_in_zone_for_publish(&zone, &targets, &publisher)?;
             let mut code = 0;
             let mut results = Vec::new();
-            for port in ports.as_slice() {
-                let (port_code, result) = generate(
-                    &zone,
-                    *port,
-                    hostname.as_deref(),
-                    info,
-                    params,
-                    publisher,
-                    starttls,
-                )
-                .await?;
-                code = port_code;
-                results.push(result);
+            for target in &targets {
+                for port in ports.as_slice() {
+                    let (port_code, result) = generate(
+                        &target.zone,
+                        *port,
+                        target.hostname.as_deref(),
+                        info,
+                        params,
+                        publisher,
+                        starttls,
+                    )
+                    .await?;
+                    code = port_code;
+                    results.push(result);
+                }
             }
             if output::is_json() {
                 output::emit(&Report::Generate {
                     zone,
                     hostname,
+                    mx,
                     results,
                 })?;
             }
@@ -121,30 +134,53 @@ async fn run() -> Result<u8> {
             zone,
             ports,
             hostname,
+            mx,
             starttls,
             publisher,
             dryrun,
         } => {
             let starttls = starttls.proto();
+            let mx = mx.mx;
+            let publisher_kind = publisher.kind();
+            let targets = match resolve_targets(&zone, hostname.as_deref(), mx).await {
+                Ok(targets) => targets,
+                Err(err) => {
+                    eprintln!("{err:#}");
+                    return Ok(1);
+                }
+            };
+            if publisher_kind.is_some() {
+                for target in &targets {
+                    if !target.in_zone(&zone) {
+                        anyhow::bail!(
+                            "MX {} is outside {zone}; cannot prune its TLSA from this zone",
+                            target.connect_host()
+                        );
+                    }
+                }
+            }
             let mut code = 0;
             let mut results = Vec::new();
-            for port in ports.as_slice() {
-                let (port_code, result) = prune(
-                    &zone,
-                    *port,
-                    hostname.as_deref(),
-                    publisher.kind(),
-                    dryrun,
-                    starttls,
-                )
-                .await?;
-                code = port_code;
-                results.push(result);
+            for target in &targets {
+                for port in ports.as_slice() {
+                    let (port_code, result) = prune(
+                        &target.zone,
+                        *port,
+                        target.hostname.as_deref(),
+                        publisher_kind,
+                        dryrun,
+                        starttls,
+                    )
+                    .await?;
+                    code = port_code;
+                    results.push(result);
+                }
             }
             if output::is_json() {
                 output::emit(&Report::Prune {
                     zone,
                     hostname,
+                    mx,
                     results,
                 })?;
             }
@@ -196,6 +232,7 @@ async fn run() -> Result<u8> {
             zone,
             ports,
             hostname,
+            mx,
             info,
             starttls,
             warn,
@@ -211,6 +248,7 @@ async fn run() -> Result<u8> {
                     output::emit(&Report::Verify {
                         zone,
                         hostname,
+                        mx: mx.mx,
                         results: Vec::new(),
                         exit: 3,
                     })?;
@@ -219,29 +257,58 @@ async fn run() -> Result<u8> {
             }
             let expiry = (!no_expiry_check).then_some((warn, critical));
             let starttls = starttls.proto();
+            let mx = mx.mx;
+            let targets = match resolve_targets(&zone, hostname.as_deref(), mx).await {
+                Ok(targets) => targets,
+                Err(err) => {
+                    eprintln!("{err:#}");
+                    output::text("UNKNOWN - Something went wrong. Check logs");
+                    if output::is_json() {
+                        output::emit(&Report::Verify {
+                            zone,
+                            hostname,
+                            mx,
+                            results: Vec::new(),
+                            exit: 3,
+                        })?;
+                    }
+                    return Ok(3);
+                }
+            };
             let ports = ports.as_slice();
-            let multi = ports.len() > 1;
+            let multi_port = ports.len() > 1;
+            let multi_host = targets.len() > 1;
             let mut results = Vec::new();
-            for port in ports {
-                results.push(
-                    verify(
-                        &zone,
-                        *port,
-                        hostname.as_deref(),
-                        info,
-                        multi,
-                        expiry,
-                        !no_dnssec_check,
-                        starttls,
-                    )
-                    .await,
-                );
+            for target in &targets {
+                for port in ports {
+                    let prefix = match (multi_host, multi_port) {
+                        (true, true) => Some(format!("{}/{port}", target.connect_host())),
+                        (true, false) => Some(target.connect_host()),
+                        (false, true) => Some(port.to_string()),
+                        (false, false) => None,
+                    };
+                    results.push(
+                        verify(
+                            &target.zone,
+                            *port,
+                            target.hostname.as_deref(),
+                            info,
+                            prefix.as_deref(),
+                            expiry,
+                            !no_dnssec_check,
+                            starttls,
+                            mx.then(|| target.connect_host()),
+                        )
+                        .await,
+                    );
+                }
             }
             let worst = worst_verify_exit(results.iter().map(|result| result.exit));
             if output::is_json() {
                 output::emit(&Report::Verify {
                     zone,
                     hostname,
+                    mx,
                     results,
                     exit: worst,
                 })?;
@@ -348,6 +415,47 @@ async fn run() -> Result<u8> {
 
 /// The publishers' rollover/replace/prune logic only understands 3 1 1, so
 /// refuse to publish anything else rather than silently writing wrong params.
+async fn resolve_targets(zone: &str, hostname: Option<&str>, mx: bool) -> Result<Vec<HostTarget>> {
+    if !mx {
+        return Ok(vec![HostTarget::from_label(zone, hostname)]);
+    }
+    let records = dns::lookup_mx(zone).await?;
+    if records.is_empty() {
+        anyhow::bail!("no MX records for {zone}");
+    }
+    verbose::step(format_args!(
+        "MX hosts: {}",
+        records
+            .iter()
+            .map(|mx| format!("{} ({})", mx.host, mx.preference))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    Ok(records
+        .iter()
+        .map(|mx| HostTarget::from_mx(zone, &mx.host))
+        .collect())
+}
+
+fn require_targets_in_zone_for_publish(
+    zone: &str,
+    targets: &[HostTarget],
+    publisher: &PublisherOpts,
+) -> Result<()> {
+    if publisher.kind.is_none() {
+        return Ok(());
+    }
+    for target in targets {
+        if !target.in_zone(zone) {
+            anyhow::bail!(
+                "MX {} is outside {zone}; cannot publish its TLSA into this zone",
+                target.connect_host()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn require_default_params_for_publish(params: TlsaParams, publisher: &PublisherOpts) -> Result<()> {
     if publisher.kind.is_some() && !params.is_default() {
         anyhow::bail!(
@@ -1490,17 +1598,18 @@ async fn verify(
     port: u16,
     hostname: Option<&str>,
     info: bool,
-    prefix: bool,
+    prefix: Option<&str>,
     expiry: Option<(u32, u32)>,
     dnssec_check: bool,
     starttls: Option<StarttlsProto>,
+    host_label: Option<String>,
 ) -> VerifyResult {
     let say = |msg: &str| {
         if output::is_json() {
             return;
         }
-        if prefix {
-            println!("{port}: {msg}");
+        if let Some(prefix) = prefix {
+            println!("{prefix}: {msg}");
         } else {
             println!("{msg}");
         }
@@ -1516,6 +1625,7 @@ async fn verify(
         VerifyResult {
             port,
             name,
+            host: host_label.clone(),
             status: outcome.status,
             message: outcome.message,
             exit: outcome.exit,
@@ -1657,6 +1767,7 @@ async fn verify(
     VerifyResult {
         port,
         name,
+        host: host_label,
         status: outcome.status,
         message: outcome.message,
         exit: outcome.exit,

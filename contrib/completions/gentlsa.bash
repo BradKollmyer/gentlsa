@@ -215,7 +215,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__generate)
-            opts="-v -h --hostname --info --starttls --usage --selector --matching --cloudflare --nsupdate --route53 --google --azure --replace --dryrun --verbose --json --timeout --help"
+            opts="-v -h --hostname --mx --info --starttls --usage --selector --matching --cloudflare --nsupdate --route53 --google --azure --replace --dryrun --verbose --json --timeout --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -511,7 +511,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__prune)
-            opts="-v -h --hostname --starttls --cloudflare --nsupdate --route53 --google --azure --dryrun --verbose --json --timeout --help"
+            opts="-v -h --hostname --mx --starttls --cloudflare --nsupdate --route53 --google --azure --dryrun --verbose --json --timeout --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -593,7 +593,7 @@ _gentlsa() {
             return 0
             ;;
         gentlsa__subcmd__verify)
-            opts="-v -h --hostname --info --starttls --warn --critical --no-expiry-check --no-dnssec-check --verbose --json --timeout --help"
+            opts="-v -h --hostname --mx --info --starttls --warn --critical --no-expiry-check --no-dnssec-check --verbose --json --timeout --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

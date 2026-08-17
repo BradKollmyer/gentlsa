@@ -145,6 +145,80 @@ pub async fn lookup_tlsa_dnssec(name: &str) -> Result<TlsaLookup> {
     Ok(TlsaLookup { records, dnssec })
 }
 
+/// An MX exchange host after preference sort, null-MX skip, and de-duplication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MxHost {
+    pub preference: u16,
+    pub host: String,
+}
+
+/// Look up MX for `zone`, lowest preference first. Null MX (RFC 7505, target ".")
+/// is dropped. Duplicate targets keep the lowest preference.
+pub async fn lookup_mx(zone: &str) -> Result<Vec<MxHost>> {
+    let name = format!("{}.", zone.trim_end_matches('.'));
+    verbose::step(format_args!("DNS MX lookup {name}"));
+    let resolver = build_resolver(false)?;
+    let lookup = match dns_timeout(resolver.lookup(name.clone(), RecordType::MX)).await? {
+        Ok(lookup) => lookup,
+        Err(err) if err.is_no_records_found() => {
+            verbose::step("DNS returned 0 MX record(s)");
+            return Ok(Vec::new());
+        }
+        Err(err) => {
+            verbose::step(format_args!("MX lookup failed: {err}"));
+            return Err(err).context(format!("MX lookup failed for {name}"));
+        }
+    };
+
+    let mut records = Vec::new();
+    for answer in lookup.answers() {
+        let RData::MX(mx) = &answer.data else {
+            continue;
+        };
+        let host = mx.exchange.to_string();
+        let host = host.trim_end_matches('.');
+        if host.is_empty() {
+            verbose::step(format_args!(
+                "skipping null MX (preference {})",
+                mx.preference
+            ));
+            continue;
+        }
+        records.push((mx.preference, host.to_string()));
+    }
+    let hosts = normalize_mx(records);
+    verbose::step(format_args!("DNS returned {} MX host(s)", hosts.len()));
+    Ok(hosts)
+}
+
+fn normalize_mx(records: Vec<(u16, String)>) -> Vec<MxHost> {
+    let mut hosts = Vec::new();
+    for (preference, host) in records {
+        let host = host.trim_end_matches('.').to_string();
+        if host.is_empty() {
+            continue;
+        }
+        if let Some(existing) = hosts
+            .iter_mut()
+            .find(|existing: &&mut MxHost| existing.host.eq_ignore_ascii_case(&host))
+        {
+            if preference < existing.preference {
+                existing.preference = preference;
+            }
+            continue;
+        }
+        hosts.push(MxHost { preference, host });
+    }
+    hosts.sort_by(|a, b| {
+        a.preference.cmp(&b.preference).then_with(|| {
+            a.host
+                .to_ascii_lowercase()
+                .cmp(&b.host.to_ascii_lowercase())
+        })
+    });
+    hosts
+}
+
 /// Warn on stderr when the zone has no DS record at its parent: without a signed
 /// delegation, DANE clients cannot authenticate the TLSA records and ignore them.
 /// Checks each zone once per process; lookup failures stay silent (publishing
@@ -229,5 +303,32 @@ fn from_tlsa(tlsa: &TLSA) -> TlsaRecord {
         selector: u8::from(tlsa.selector),
         matching: u8::from(tlsa.matching),
         certificate: hex::encode(&tlsa.cert_data),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_mx_sorts_dedups_and_drops_null() {
+        let hosts = normalize_mx(vec![
+            (20, "b.example.com.".into()),
+            (10, "a.example.com".into()),
+            (5, ".".into()),
+            (30, "A.example.com".into()),
+            (15, "c.example.net".into()),
+        ]);
+        assert_eq!(
+            hosts
+                .iter()
+                .map(|h| (h.preference, h.host.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (10, "a.example.com"),
+                (15, "c.example.net"),
+                (20, "b.example.com"),
+            ]
+        );
     }
 }

@@ -44,6 +44,7 @@ none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 '--selector=[TLSA selector\: 0 full certificate, 1 SubjectPublicKeyInfo]:SELECTOR:_default' \
 '--matching=[TLSA matching type\: 0 exact, 1 SHA2-256, 2 SHA2-512]:MATCHING:_default' \
 '--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
+'(--hostname)--mx[Look up the zone'\''s MX RRset and operate on each exchange host]' \
 '--info[Print certificate details]' \
 '--cloudflare[Publish / list / prune via the Cloudflare API]' \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
@@ -94,6 +95,7 @@ pop3\:""
 xmpp\:""
 none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 '--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
+'(--hostname)--mx[Look up the zone'\''s MX RRset and operate on each exchange host]' \
 '--cloudflare[Publish / list / prune via the Cloudflare API]' \
 '--nsupdate[Publish via RFC 2136 dynamic update (TSIG)]' \
 '--route53[Publish / list / prune via Amazon Route 53]' \
@@ -150,6 +152,7 @@ none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 '--warn=[Warn when the live certificate expires in this many days or fewer]:DAYS:_default' \
 '--critical=[Critical when the live certificate expires in this many days or fewer]:DAYS:_default' \
 '--timeout=[Overall deadline in seconds for connect, I/O, and DNS (default 30)]:SECONDS:_default' \
+'(--hostname)--mx[Look up the zone'\''s MX RRset and operate on each exchange host]' \
 '--info[]' \
 '(--warn --critical)--no-expiry-check[Check the TLSA hash only, ignoring certificate expiry (pre-0.4.1 behavior)]' \
 '--no-dnssec-check[Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)]' \

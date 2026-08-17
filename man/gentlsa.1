@@ -12,6 +12,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -mx
 .Op Fl -starttls Ar proto
 .Op Fl -info
 .Op Fl -usage Ar n
@@ -37,6 +38,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -mx
 .Op Fl -starttls Ar proto
 .Op Fl -cloudflare | Fl -nsupdate | Fl -route53 | Fl -google | Fl -azure
 .Op Fl -dryrun
@@ -68,6 +70,7 @@
 .Ar zone
 .Ar ports
 .Op Fl -hostname Ar name
+.Op Fl -mx
 .Op Fl -starttls Ar proto
 .Op Fl -info
 .Op Fl -warn Ar days
@@ -240,6 +243,12 @@ print-only for now.
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
 Short hostname without the zone.
+.It Fl -mx
+Look up the zone's MX records and generate a record for each exchange
+host.
+Conflicts with
+.Fl -hostname .
+An MX outside the zone is printed but cannot be published here.
 .It Fl -starttls Ar proto
 STARTTLS protocol
 .Pq Sy smtp , imap , pop3 , xmpp ,
@@ -280,6 +289,9 @@ to include every port.
 List, and with a publisher delete, TLSA records that no longer match
 the live certificate.
 Run this after a rollover has been live longer than the DNS TTL.
+.Fl -mx
+prunes each MX host, as in
+.Cm generate .
 .Fl -starttls
 controls how the live certificate is fetched, as in
 .Cm generate .
@@ -412,6 +424,11 @@ unauthenticated; point the system resolver at a full resolver or pass
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
 Short hostname without the zone.
+.It Fl -mx
+Look up the zone's MX records and verify each exchange host.
+Conflicts with
+.Fl -hostname .
+The overall exit is the worst result.
 .It Fl -starttls Ar proto
 STARTTLS protocol used to fetch the live certificate, as in
 .Cm generate .
@@ -611,6 +628,11 @@ Nagios-style verify:
 .Bd -literal -offset indent
 $ gentlsa verify www.freebsd.org 443
 OK - TLSA is valid
+.Ed
+.Pp
+Every MX host for a mail domain on port 25:
+.Bd -literal -offset indent
+$ gentlsa verify example.com 25 --mx
 .Ed
 .Pp
 Automated DANE rollover after issuing a new certificate

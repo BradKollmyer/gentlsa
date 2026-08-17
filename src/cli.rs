@@ -77,6 +77,14 @@ impl StarttlsFlags {
     }
 }
 
+/// Look up MX hosts instead of a single --hostname.
+#[derive(Debug, Clone, Copy, Default, clap::Args)]
+pub struct MxFlags {
+    /// Look up the zone's MX RRset and operate on each exchange host
+    #[arg(long, conflicts_with = "hostname")]
+    pub mx: bool,
+}
+
 /// Mutually exclusive publisher flags shared by generate/list/prune/file/rollover.
 #[derive(Debug, Clone, Copy, Default, clap::Args)]
 pub struct PublisherFlags {
@@ -158,6 +166,8 @@ pub enum Command {
         /// Short hostname, without the zone (for example "mx")
         #[arg(long)]
         hostname: Option<String>,
+        #[command(flatten)]
+        mx: MxFlags,
         /// Print certificate details
         #[arg(long)]
         info: bool,
@@ -198,6 +208,8 @@ pub enum Command {
         ports: Ports,
         #[arg(long)]
         hostname: Option<String>,
+        #[command(flatten)]
+        mx: MxFlags,
         #[command(flatten)]
         starttls: StarttlsFlags,
         #[command(flatten)]
@@ -255,6 +267,8 @@ pub enum Command {
         ports: Ports,
         #[arg(long)]
         hostname: Option<String>,
+        #[command(flatten)]
+        mx: MxFlags,
         #[arg(long)]
         info: bool,
         #[command(flatten)]
@@ -497,6 +511,38 @@ mod tests {
                 "25",
                 "--starttls",
                 "ftp"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn clap_mx_flag() {
+        let cli = Cli::try_parse_from(["gentlsa", "verify", "example.com", "25", "--mx"]).unwrap();
+        match cli.command {
+            Command::Verify { mx, hostname, .. } => {
+                assert!(mx.mx);
+                assert!(hostname.is_none());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["gentlsa", "generate", "example.com", "25,587", "--mx"]).unwrap();
+        match cli.command {
+            Command::Generate { mx, .. } => assert!(mx.mx),
+            other => panic!("unexpected {other:?}"),
+        }
+
+        assert!(
+            Cli::try_parse_from([
+                "gentlsa",
+                "verify",
+                "example.com",
+                "25",
+                "--mx",
+                "--hostname",
+                "mx"
             ])
             .is_err()
         );

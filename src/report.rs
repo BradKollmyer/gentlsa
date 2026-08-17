@@ -14,6 +14,8 @@ pub enum Report {
         zone: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         hostname: Option<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        mx: bool,
         results: Vec<GenerateResult>,
     },
     List {
@@ -43,12 +45,16 @@ pub enum Report {
         zone: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         hostname: Option<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        mx: bool,
         results: Vec<PruneResult>,
     },
     Verify {
         zone: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         hostname: Option<String>,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        mx: bool,
         results: Vec<VerifyResult>,
         exit: u8,
     },
@@ -242,6 +248,8 @@ pub struct PruneResult {
 pub struct VerifyResult {
     pub port: u16,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     pub status: &'static str,
     pub message: String,
     pub exit: u8,
@@ -843,6 +851,7 @@ mod tests {
         let report = Report::Generate {
             zone: "example.com".into(),
             hostname: None,
+            mx: false,
             results: vec![GenerateResult::from_cert(
                 443,
                 "example.com".into(),
@@ -876,6 +885,7 @@ mod tests {
         let ok = VerifyResult {
             port: 443,
             name: "_443._tcp.example.com.".into(),
+            host: None,
             status: ok_outcome.status,
             message: ok_outcome.message,
             exit: ok_outcome.exit,
@@ -891,6 +901,7 @@ mod tests {
         let err = VerifyResult {
             port: 25,
             name: "_25._tcp.example.com.".into(),
+            host: None,
             status: err_outcome.status,
             message: err_outcome.message,
             exit: err_outcome.exit,
@@ -904,6 +915,7 @@ mod tests {
         let report = Report::Verify {
             zone: "example.com".into(),
             hostname: None,
+            mx: false,
             results: vec![ok, err],
             exit: worst_verify_exit([0, 2]),
         };

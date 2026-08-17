@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `--mx` on `generate`, `verify`, and `prune` looks up the zone's MX RRset and operates on each exchange host (lowest preference first), so DANE-for-mail does not need a `--hostname` per MX. Out-of-zone exchanges are checked but cannot be published into the zone. Null MX (RFC 7505) is skipped
 - `--timeout <SECONDS>` (default 30) is an overall deadline for connect, socket I/O, and DNS, so Nagios `verify` can finish before the service check timeout. TCP connect was previously unbounded
 - `--starttls smtp|imap|pop3|xmpp|none` selects the plaintext upgrade independently of the port on `generate`, `verify`, `list`, `prune`, and `rollover`. When omitted, 25/587 are SMTP, 143 IMAP, 110 POP3, and 5222/5269 XMPP; every other port stays implicit TLS. `--starttls none` forces implicit TLS on a STARTTLS port
 - `gentlsa completions <shell>` prints a bash, zsh, fish, PowerShell, or elvish completion script; the RPM, deb, and FreeBSD packages install the bash, zsh, and fish ones
