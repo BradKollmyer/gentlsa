@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 - 2026-08-22
+
+- Upgrade hmac 0.13, jsonwebtoken 11, pem 4, reqwest 0.13, and sha2 0.11
+
 ## 0.5.0 - 2026-08-17
 
 - `verify` validates the TLSA records with DNSSEC (locally, from the root trust anchor): an unauthenticated RRset is WARNING — DANE clients ignore TLSA records they cannot authenticate — and a bogus RRset is CRITICAL. `--no-dnssec-check` restores the pre-0.5.0 hash-only verdict, and `--json` reports the verdict in `dnssec`. Publishing to a zone with no DS record warns on stderr for the same reason
