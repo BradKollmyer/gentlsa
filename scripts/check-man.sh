@@ -24,7 +24,7 @@ need() {
     done
 }
 
-need "$page1" generate verify list prune rollover cloudflare nsupdate route53 google azure completions
+need "$page1" generate verify list prune rollover cloudflare nsupdate route53 google azure completions timeout
 need "$page5" cloudflare.cfg nsupdate.cfg route53.cfg google.cfg azure.cfg
 
 if command -v mandoc >/dev/null 2>&1; then

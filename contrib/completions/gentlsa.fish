@@ -39,8 +39,8 @@ complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "nsupdate" -d 'RFC 2
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "route53" -d 'Amazon Route 53 helpers'
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "google" -d 'Google Cloud DNS helpers'
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "azure" -d 'Azure DNS helpers'
-complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "completions" -d 'Show TLSA info for a local certificate file Print a shell completion script to stdout'
-complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "file" -d 'Mutually exclusive publisher flags shared by generate/list/prune/file/rollover'
+complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "completions" -d 'Print a shell completion script to stdout'
+complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "file" -d 'Show TLSA info for a local certificate file'
 complete -c gentlsa -n "__fish_gentlsa_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l hostname -d 'Short hostname, without the zone (for example "mx")' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand generate" -l starttls -d 'STARTTLS protocol, or none for implicit TLS. Default: infer from the port (25/587 smtp, 143 imap, 110 pop3, 5222/5269 xmpp)' -r -f -a "smtp\t''
@@ -168,7 +168,7 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand completions" -s v -l ver
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand completions" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand completions" -s h -l help -d 'Print help'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l zone -d 'Zone to publish into when using a publisher flag' -r
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l hostname -r
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l hostname -d 'Short hostname, without the zone (for example "mx")' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l port -d 'Service port or comma-separated list (for example 443 or 25,465)' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l usage -d 'TLSA certificate usage: 0 PKIX-TA, 1 PKIX-EE, 2 DANE-TA, 3 DANE-EE' -r
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l selector -d 'TLSA selector: 0 full certificate, 1 SubjectPublicKeyInfo' -r
@@ -180,8 +180,8 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l nsupdate -d 'Pu
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l route53 -d 'Publish / list / prune via Amazon Route 53'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l google -d 'Publish / list / prune via Google Cloud DNS'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l azure -d 'Publish / list / prune via Azure DNS'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l replace
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l dryrun
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l replace -d 'With a publisher, overwrite the existing TLSA instead of adding a rollover record'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l dryrun -d 'With a publisher, print the action but do not write records'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -s v -l verbose -d 'Print each processing step to stderr'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -l json -d 'Emit a single JSON object on stdout instead of text'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand file" -s h -l help -d 'Print help'
@@ -195,6 +195,6 @@ complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_see
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "route53" -d 'Amazon Route 53 helpers'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "google" -d 'Google Cloud DNS helpers'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "azure" -d 'Azure DNS helpers'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "completions" -d 'Show TLSA info for a local certificate file Print a shell completion script to stdout'
-complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "file" -d 'Mutually exclusive publisher flags shared by generate/list/prune/file/rollover'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "completions" -d 'Print a shell completion script to stdout'
+complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "file" -d 'Show TLSA info for a local certificate file'
 complete -c gentlsa -n "__fish_gentlsa_using_subcommand help; and not __fish_seen_subcommand_from generate list prune rollover verify cloudflare nsupdate route53 google azure completions file help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'

@@ -1,4 +1,4 @@
-.Dd August 17, 2026
+.Dd August 22, 2026
 .Dt GENTLSA 1
 .Os
 .Sh NAME
@@ -8,6 +8,7 @@
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm generate
 .Ar zone
 .Ar ports
@@ -24,6 +25,7 @@
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm list
 .Ar zone
 .Op Ar ports
@@ -34,6 +36,7 @@
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm prune
 .Ar zone
 .Ar ports
@@ -45,6 +48,7 @@
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm rollover
 .Ar certfile
 .Ar zone
@@ -60,12 +64,14 @@
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm rollover
 .Fl -resume
 .Op Ar job
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm verify
 .Ar zone
 .Ar ports
@@ -80,6 +86,7 @@
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm file
 .Ar certfile
 .Op Fl -zone Ar zone
@@ -95,29 +102,34 @@
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm cloudflare
 .Op Fl -info
 .Op Fl -listzones
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm nsupdate
 .Op Fl -info
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm route53
 .Op Fl -info
 .Op Fl -listzones
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm google
 .Op Fl -info
 .Op Fl -listzones
 .Nm
 .Op Fl v
 .Op Fl -json
+.Op Fl -timeout Ar seconds
 .Cm azure
 .Op Fl -info
 .Op Fl -listzones

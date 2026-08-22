@@ -1,6 +1,6 @@
 # GenTLSA
 
-CLI for DANE/TLSA records. It prints `TLSA 3 1 1` (DANE-EE, SubjectPublicKeyInfo, SHA-256) from a live TLS certificate or a local PEM/DER file, optionally publishes that record to Cloudflare, and can verify DNS against the certificate the server presents.
+CLI for DANE/TLSA records. It prints `TLSA 3 1 1` (DANE-EE, SubjectPublicKeyInfo, SHA-256) by default from a live TLS certificate or a local PEM/DER file, publishes and rolls those records over via Cloudflare, RFC 2136/TSIG, Route 53, Google Cloud DNS, or Azure DNS, and verifies DNS against the certificate the server presents.
 
 Rust port of [Emiel Kollof’s gentlsa](https://github.com/ekollof/gentlsa), with additional features.
 

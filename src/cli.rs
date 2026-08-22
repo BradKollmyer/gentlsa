@@ -328,18 +328,20 @@ pub enum Command {
         #[arg(long)]
         listzones: bool,
     },
-    /// Show TLSA info for a local certificate file
     /// Print a shell completion script to stdout
     Completions {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+    /// Show TLSA info for a local certificate file
     File {
+        /// Local PEM or DER certificate
         certfile: PathBuf,
         /// Zone to publish into when using a publisher flag
         #[arg(long)]
         zone: Option<String>,
+        /// Short hostname, without the zone (for example "mx")
         #[arg(long)]
         hostname: Option<String>,
         /// Service port or comma-separated list (for example 443 or 25,465)
@@ -352,8 +354,10 @@ pub enum Command {
         params: TlsaParamFlags,
         #[command(flatten)]
         publisher: PublisherFlags,
+        /// With a publisher, overwrite the existing TLSA instead of adding a rollover record
         #[arg(long)]
         replace: bool,
+        /// With a publisher, print the action but do not write records
         #[arg(long)]
         dryrun: bool,
     },
