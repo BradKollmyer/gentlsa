@@ -17,6 +17,7 @@ use serde::Serialize;
 
 use crate::output;
 use crate::publish::{self, DaneTlsa, PruneReport, PublishAction, PublishMode, PublishReport};
+use crate::redact::Redacted;
 use crate::tlsa;
 use crate::verbose;
 
@@ -25,7 +26,7 @@ const DEFAULT_TTL: u32 = 3600;
 const TSIG_FUDGE_SECS: u16 = 300;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub server: String,
     pub port: u16,
@@ -33,6 +34,19 @@ pub struct Config {
     secret: Vec<u8>,
     pub algorithm: TsigAlgorithm,
     pub ttl: u32,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("server", &self.server)
+            .field("port", &self.port)
+            .field("key_name", &self.key_name)
+            .field("secret", &Redacted)
+            .field("algorithm", &self.algorithm)
+            .field("ttl", &self.ttl)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -462,7 +476,7 @@ fn check_response(op: &str, code: ResponseCode) -> Result<()> {
     bail!("nsupdate {op} failed: {code}");
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 struct PartialConfig {
     server: Option<String>,
     port: Option<u16>,
@@ -470,6 +484,19 @@ struct PartialConfig {
     secret: Option<String>,
     algorithm: Option<String>,
     ttl: Option<u32>,
+}
+
+impl std::fmt::Debug for PartialConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PartialConfig")
+            .field("server", &self.server)
+            .field("port", &self.port)
+            .field("key_name", &self.key_name)
+            .field("secret", &self.secret.as_ref().map(|_| Redacted))
+            .field("algorithm", &self.algorithm)
+            .field("ttl", &self.ttl)
+            .finish()
+    }
 }
 
 impl PartialConfig {
@@ -669,6 +696,9 @@ mod tests {
         )
         .unwrap();
         let partial = partial_from_ini(&conf);
+        let partial_debug = format!("{partial:?}");
+        assert!(partial_debug.contains("<redacted>"));
+        assert!(!partial_debug.contains("AQIDBAUGBwgJCgsMDQ4PEA=="));
         let cfg = partial.into_config().unwrap();
         assert_eq!(cfg.server, "ns1.example.com");
         assert_eq!(cfg.port, 53);
@@ -676,6 +706,10 @@ mod tests {
         assert_eq!(cfg.algorithm, TsigAlgorithm::HmacSha256);
         assert_eq!(cfg.ttl, 120);
         assert_eq!(cfg.secret.len(), 16);
+        let debug = format!("{cfg:?}");
+        assert!(debug.contains("ns1.example.com"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("1, 2, 3"));
     }
 
     #[test]

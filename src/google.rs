@@ -9,6 +9,7 @@ use crate::output;
 use crate::publish::{
     self, DaneTlsa, ListedTlsa, PruneReport, PublishAction, PublishMode, PublishReport,
 };
+use crate::redact::Redacted;
 use crate::tlsa;
 use crate::verbose;
 
@@ -17,7 +18,6 @@ const API_BASE: &str = "https://dns.googleapis.com/dns/v1";
 const SCOPE: &str = "https://www.googleapis.com/auth/ndev.clouddns.readwrite";
 const DEFAULT_TTL: u32 = 3600;
 
-#[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
     project: String,
@@ -27,10 +27,32 @@ pub struct Client {
     token: tokio::sync::Mutex<Option<CachedToken>>,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("http", &self.http)
+            .field("project", &self.project)
+            .field("client_email", &self.client_email)
+            .field("private_key", &Redacted)
+            .field("ttl", &self.ttl)
+            .field("token", &self.token)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 struct CachedToken {
     access_token: String,
     expires_at: Instant,
+}
+
+impl std::fmt::Debug for CachedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedToken")
+            .field("access_token", &Redacted)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,12 +70,22 @@ pub struct ManagedZone {
     pub id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct ServiceAccount {
     #[serde(default)]
     project_id: String,
     client_email: String,
     private_key: String,
+}
+
+impl std::fmt::Debug for ServiceAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceAccount")
+            .field("project_id", &self.project_id)
+            .field("client_email", &self.client_email)
+            .field("private_key", &Redacted)
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -65,11 +97,20 @@ struct JwtClaims {
     exp: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     #[serde(default)]
     expires_in: u64,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &Redacted)
+            .field("expires_in", &self.expires_in)
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -713,5 +754,34 @@ mod tests {
     #[test]
     fn config_paths_prefer_etc() {
         assert_eq!(config_paths()[0], PathBuf::from("/etc/gentlsa/google.cfg"));
+    }
+
+    #[test]
+    fn debug_redacts_private_key_and_token() {
+        let account = ServiceAccount {
+            project_id: "proj".into(),
+            client_email: "sa@example.com".into(),
+            private_key: "-----BEGIN PRIVATE KEY-----\nSECRET_PEM\n".into(),
+        };
+        let account_debug = format!("{account:?}");
+        assert!(account_debug.contains("sa@example.com"));
+        assert!(account_debug.contains("<redacted>"));
+        assert!(!account_debug.contains("SECRET_PEM"));
+
+        let token = CachedToken {
+            access_token: "ya29.SECRET_TOKEN".into(),
+            expires_at: Instant::now(),
+        };
+        let token_debug = format!("{token:?}");
+        assert!(token_debug.contains("<redacted>"));
+        assert!(!token_debug.contains("SECRET_TOKEN"));
+
+        let response = TokenResponse {
+            access_token: "ya29.SECRET_TOKEN".into(),
+            expires_in: 3600,
+        };
+        let response_debug = format!("{response:?}");
+        assert!(response_debug.contains("<redacted>"));
+        assert!(!response_debug.contains("SECRET_TOKEN"));
     }
 }

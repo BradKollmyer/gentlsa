@@ -7,6 +7,7 @@ mod google;
 mod nsupdate;
 mod output;
 mod publish;
+mod redact;
 mod report;
 mod rollover;
 mod route53;

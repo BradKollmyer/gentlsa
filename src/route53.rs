@@ -11,6 +11,7 @@ use crate::output;
 use crate::publish::{
     self, DaneTlsa, ListedTlsa, PruneReport, PublishAction, PublishMode, PublishReport,
 };
+use crate::redact::Redacted;
 use crate::tlsa;
 use crate::verbose;
 
@@ -21,11 +22,24 @@ const DEFAULT_TTL: u32 = 3600;
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Credentials {
     access_key: String,
     secret_key: String,
     session_token: Option<String>,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("access_key", &self.access_key)
+            .field("secret_key", &Redacted)
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| Redacted),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -810,6 +824,20 @@ mod tests {
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].certificate, "aabb");
         assert_eq!(listed[1].usage, 2);
+    }
+
+    #[test]
+    fn debug_redacts_secret_key_and_session_token() {
+        let creds = Credentials {
+            access_key: "AKIATEST".into(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG".into(),
+            session_token: Some("FwoGZXIvYXdzSECRET".into()),
+        };
+        let debug = format!("{creds:?}");
+        assert!(debug.contains("AKIATEST"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("wJalrXUtnFEMI"));
+        assert!(!debug.contains("FwoGZXIvYXdzSECRET"));
     }
 
     #[test]

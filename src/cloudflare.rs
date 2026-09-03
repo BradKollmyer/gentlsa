@@ -8,15 +8,29 @@ use crate::output;
 use crate::publish::{
     self, DaneTlsa, PruneReport, PublishAction, PublishMode, PublishReport, names_equal,
 };
+use crate::redact::Redacted;
 use crate::tlsa;
 use crate::verbose;
 
 const API_BASE: &str = "https://api.cloudflare.com/client/v4";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Auth {
     Token(String),
     Key { email: String, key: String },
+}
+
+impl std::fmt::Debug for Auth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Token(_) => f.debug_tuple("Token").field(&Redacted).finish(),
+            Self::Key { email, .. } => f
+                .debug_struct("Key")
+                .field("email", email)
+                .field("key", &Redacted)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -792,5 +806,22 @@ mod tests {
 
         let empty = ini::Ini::load_from_str("[CloudFlare]\ntoken = \n").unwrap();
         assert!(auth_from_ini(&empty).is_none());
+    }
+
+    #[test]
+    fn debug_redacts_api_credentials() {
+        let token = Auth::Token("cf-secret-token".into());
+        let token_debug = format!("{token:?}");
+        assert!(token_debug.contains("<redacted>"));
+        assert!(!token_debug.contains("cf-secret-token"));
+
+        let key = Auth::Key {
+            email: "ops@example.com".into(),
+            key: "global-api-key".into(),
+        };
+        let key_debug = format!("{key:?}");
+        assert!(key_debug.contains("ops@example.com"));
+        assert!(key_debug.contains("<redacted>"));
+        assert!(!key_debug.contains("global-api-key"));
     }
 }

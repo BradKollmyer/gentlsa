@@ -8,6 +8,7 @@ use crate::output;
 use crate::publish::{
     self, DaneTlsa, ListedTlsa, PruneReport, PublishAction, PublishMode, PublishReport,
 };
+use crate::redact::Redacted;
 use crate::tlsa;
 use crate::verbose;
 
@@ -18,7 +19,6 @@ const ZONES_API: &str = "2018-05-01";
 const TLSA_API: &str = "2023-07-01-preview";
 const DEFAULT_TTL: u32 = 3600;
 
-#[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
     tenant_id: String,
@@ -30,10 +30,34 @@ pub struct Client {
     token: tokio::sync::Mutex<Option<CachedToken>>,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("http", &self.http)
+            .field("tenant_id", &self.tenant_id)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &Redacted)
+            .field("subscription", &self.subscription)
+            .field("resource_group", &self.resource_group)
+            .field("ttl", &self.ttl)
+            .field("token", &self.token)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 struct CachedToken {
     access_token: String,
     expires_at: Instant,
+}
+
+impl std::fmt::Debug for CachedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedToken")
+            .field("access_token", &Redacted)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,11 +75,20 @@ pub struct DnsZone {
     pub resource_group: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     #[serde(default)]
     expires_in: u64,
+}
+
+impl std::fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &Redacted)
+            .field("expires_in", &self.expires_in)
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,7 +165,7 @@ struct ApiError {
     message: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct ServicePrincipalFile {
     #[serde(default, alias = "tenant", alias = "tenantId")]
     tenant_id: String,
@@ -142,6 +175,17 @@ struct ServicePrincipalFile {
     client_secret: String,
     #[serde(default, alias = "subscriptionId")]
     subscription_id: String,
+}
+
+impl std::fmt::Debug for ServicePrincipalFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServicePrincipalFile")
+            .field("tenant_id", &self.tenant_id)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &Redacted)
+            .field("subscription_id", &self.subscription_id)
+            .finish()
+    }
 }
 
 impl Client {
@@ -1018,5 +1062,27 @@ mod tests {
         assert_eq!(parsed.client_id, "cid");
         assert_eq!(parsed.client_secret, "secret");
         assert_eq!(parsed.subscription_id, "sub");
+    }
+
+    #[test]
+    fn debug_redacts_client_secret_and_token() {
+        let parsed = ServicePrincipalFile {
+            tenant_id: "tid".into(),
+            client_id: "cid".into(),
+            client_secret: "AZURE_CLIENT_SECRET".into(),
+            subscription_id: "sub".into(),
+        };
+        let debug = format!("{parsed:?}");
+        assert!(debug.contains("cid"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("AZURE_CLIENT_SECRET"));
+
+        let token = CachedToken {
+            access_token: "eyJ.SECRET_TOKEN".into(),
+            expires_at: Instant::now(),
+        };
+        let token_debug = format!("{token:?}");
+        assert!(token_debug.contains("<redacted>"));
+        assert!(!token_debug.contains("SECRET_TOKEN"));
     }
 }
