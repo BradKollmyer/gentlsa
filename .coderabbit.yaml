@@ -1,0 +1,30 @@
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - master
+  path_filters:
+    - "!**/Cargo.lock"
+    - "!**/contrib/completions/**"
+    - "!target/**"
+  path_instructions:
+    - path: "src/**/*.rs"
+      instructions: >
+        DANE/TLSA CLI: DNS writes, TLS certs, provider APIs.
+        Flag secret leakage, TLS verification bypass, incorrect TLSA
+        selector/matching, command injection, weak crypto, and
+        swallowed network errors.
+    - path: ".github/workflows/**"
+      instructions: >
+        Flag unpinned actions, overly broad permissions,
+        pull_request_target, secret exfil, and curl|sh without
+        checksums.
+chat:
+  auto_reply: true

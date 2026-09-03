@@ -1,0 +1,13 @@
+# cargo-dist regenerates release.yml. Ignore findings that come from
+# that generated file rather than hand-maintained CI.
+rules:
+  template-injection:
+    ignore:
+      - release.yml
+  unpinned-images:
+    ignore:
+      - release.yml
+  self-repository:
+    ignore:
+      - release.yml
+

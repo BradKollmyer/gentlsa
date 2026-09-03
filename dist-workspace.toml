@@ -2,6 +2,8 @@
 members = ["cargo:."]
 
 # Config for 'dist'
+# `dist generate` rewrites .github/workflows/release.yml. After regenerating,
+# re-pin action SHAs and keep contents: write on host / package jobs only.
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.32.0"
