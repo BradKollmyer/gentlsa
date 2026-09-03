@@ -4,9 +4,12 @@ members = ["cargo:."]
 # Config for 'dist'
 # `dist generate` rewrites .github/workflows/release.yml. After regenerating,
 # re-pin action SHAs and keep contents: write on host / package jobs only.
+# allow-dirty keeps `dist plan`/`dist host` from rejecting those hand-edits.
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.32.0"
+# Skip freshness checks on the SHA-pinned release.yml
+allow-dirty = ["ci"]
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
