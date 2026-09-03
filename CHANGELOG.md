@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2 - 2026-09-03
+
+- Redact DNS publisher credentials (API tokens, keys, client secrets, TSIG) from `Debug` output
+- Fix swapped `file` and `completions` help text
+- Document `--timeout` in the man synopsis and list all DNS publishers in the README
+- Add a security policy and GitHub code scanning (CodeQL, zizmor, Dependabot)
+
 ## 0.5.1 - 2026-08-22
 
 - Upgrade hmac 0.13, jsonwebtoken 11, pem 4, reqwest 0.13, and sha2 0.11
