@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3 - 2026-10-27
+
+- Upgrade hickory-resolver, hickory-net, and hickory-proto to 0.26.2 (DNSSEC validation, denial-of-service, and parser fixes)
+- Upgrade rustls to 0.23.46 (TLS 1.3 encryption-level checks, session debug secret leakage, Brotli certificate decompression, and ServerHello key-exchange poisoning)
+- Pin `dtolnay/rust-toolchain` to the current `v1` commit so the workflow hash comment matches
+
 ## 0.5.2 - 2026-09-03
 
 - Redact DNS publisher credentials (API tokens, keys, client secrets, TSIG) from `Debug` output
