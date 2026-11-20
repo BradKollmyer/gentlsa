@@ -32,7 +32,17 @@ sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/downloa
 sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/latest/download/gentlsa.aarch64.rpm
 ```
 
-Or download the versioned file (`gentlsa-0.5.4-1.x86_64.rpm`) from the [release page](https://github.com/BradKollmyer/gentlsa/releases) and run `sudo dnf install ./gentlsa-*.rpm`. Same files if you `rpm -i` the package. After install, enable the resume timer if you use `rollover`:
+Or pin v0.5.4:
+
+```
+# x86_64
+sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/download/v0.5.4/gentlsa.x86_64.rpm
+
+# aarch64
+sudo dnf install https://github.com/BradKollmyer/gentlsa/releases/download/v0.5.4/gentlsa.aarch64.rpm
+```
+
+The versioned files are `gentlsa-0.5.4-1.x86_64.rpm` and `gentlsa-0.5.4-1.aarch64.rpm`. `sudo dnf install ./gentlsa-*.rpm` installs a local copy. Same files if you `rpm -i` the package. After install, enable the resume timer if you use `rollover`:
 
 ```
 sudo systemctl enable --now gentlsa-resume.timer
@@ -624,7 +634,9 @@ To build a local FreeBSD `.pkg` (amd64). On macOS this cross-compiles inside an 
 
 Fixture certificate used by the hash tests: `tests/fixtures/test.example.pem`.
 
-Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag. [dist](https://github.com/axodotdev/cargo-dist) then builds binaries and installers and publishes the Homebrew formula to [BradKollmyer/homebrew-tap](https://github.com/BradKollmyer/homebrew-tap):
+Releases are cut by bumping `version` in `Cargo.toml` and pushing a matching tag. [dist](https://github.com/axodotdev/cargo-dist) then builds binaries and installers and publishes the Homebrew formula to [BradKollmyer/homebrew-tap](https://github.com/BradKollmyer/homebrew-tap). Dist's release notes list only the shell, PowerShell, and Homebrew installers. The RPM job attaches the `.rpm` and `.deb` packages, then `scripts/annotate-release-dnf.sh` adds the Fedora/RHEL `dnf` commands.
+
+To publish:
 
 ```
 # bump version in Cargo.toml and CHANGELOG.md

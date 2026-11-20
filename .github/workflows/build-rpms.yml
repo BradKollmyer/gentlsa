@@ -61,3 +61,16 @@ jobs:
             target/generate-rpm/*.rpm \
             target/debian/*.deb \
             --clobber --repo "${{ github.repository }}"
+
+          # cargo-dist announces before this job, and its install section
+          # only lists the shell, PowerShell, and Homebrew installers.
+          notes="$(mktemp)"
+          updated="$(mktemp)"
+          gh release view "$tag" --repo "${{ github.repository }}" --json body --jq .body > "$notes"
+          if grep -q 'sudo dnf install' "$notes"; then
+            echo "release notes already include dnf install"
+          else
+            GITHUB_REPOSITORY="${{ github.repository }}" \
+              bash scripts/annotate-release-dnf.sh "$tag" "$notes" > "$updated"
+            gh release edit "$tag" --repo "${{ github.repository }}" --notes-file "$updated"
+          fi
