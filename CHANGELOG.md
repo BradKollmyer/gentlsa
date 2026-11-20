@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `verify` DNSSEC checks advertise a 1232-byte EDNS UDP payload and query one nameserver at a time. A resolver list otherwise asked for the root DNSKEY in 512 bytes, got a truncated answer from every server, and reported `DNSSEC validation failed` for a chain that validates
+- Upgrade dirs to 7 and jsonwebtoken to 12, and refresh the lockfile (hickory-resolver, hickory-net, and hickory-proto 0.26.3, clap 4.6.9, reqwest 0.13.5, serde_json 1.0.154, sha2 0.11.1, tokio 1.54.1)
 
 ## 0.5.3 - 2026-10-27
 
