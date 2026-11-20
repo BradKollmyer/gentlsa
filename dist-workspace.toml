@@ -29,3 +29,8 @@ hosting = "github"
 install-updater = false
 # Ship man pages in the release archives (next to the binary)
 include = ["man/gentlsa.1", "man/gentlsa.5"]
+
+# GitHub retired the macos-14 image on 2026-11-02 (macos-14-arm64-us-default).
+# dist 0.32 still selects it for aarch64-apple-darwin.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
