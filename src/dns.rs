@@ -1,8 +1,13 @@
 use std::collections::BTreeSet;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use hickory_resolver::config::{
+    NameServerConfig, ResolveHosts, ResolverConfig, ServerOrderingStrategy,
+};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::dnssec::Proof;
 use hickory_resolver::proto::dnssec::rdata::DNSSECRData;
 use hickory_resolver::proto::rr::rdata::TLSA;
@@ -35,9 +40,9 @@ impl std::fmt::Display for TlsaRecord {
     }
 }
 
-pub async fn lookup_tlsa(name: &str) -> Result<Vec<TlsaRecord>> {
+pub async fn lookup_tlsa(name: &str, server: Option<SocketAddr>) -> Result<Vec<TlsaRecord>> {
     verbose::step(format_args!("DNS TLSA lookup {name}"));
-    let resolver = build_resolver(false)?;
+    let resolver = build_resolver(false, server)?;
 
     let lookup = match dns_timeout(resolver.tlsa_lookup(name)).await? {
         Ok(lookup) => lookup,
@@ -112,9 +117,9 @@ pub struct TlsaLookup {
 }
 
 /// Like [`lookup_tlsa`], but validates the response with DNSSEC and reports the verdict.
-pub async fn lookup_tlsa_dnssec(name: &str) -> Result<TlsaLookup> {
+pub async fn lookup_tlsa_dnssec(name: &str, server: Option<SocketAddr>) -> Result<TlsaLookup> {
     verbose::step(format_args!("DNS TLSA lookup {name} (DNSSEC validation)"));
-    let resolver = build_resolver(true)?;
+    let resolver = build_resolver(true, server)?;
 
     let lookup = match dns_timeout(resolver.tlsa_lookup(name)).await? {
         Ok(lookup) => lookup,
@@ -165,14 +170,14 @@ pub struct MxLookup {
 /// SMTP DANE is only meaningful over a secure MX RRset (RFC 7672 §2.2): an
 /// attacker who can forge an insecure MX response chooses the hostname, and can
 /// then publish a legitimately signed TLSA record at that name for a key it owns.
-pub async fn lookup_mx(zone: &str, validate: bool) -> Result<MxLookup> {
+pub async fn lookup_mx(zone: &str, validate: bool, server: Option<SocketAddr>) -> Result<MxLookup> {
     let name = format!("{}.", zone.trim_end_matches('.'));
     if validate {
         verbose::step(format_args!("DNS MX lookup {name} (DNSSEC validation)"));
     } else {
         verbose::step(format_args!("DNS MX lookup {name}"));
     }
-    let resolver = build_resolver(validate)?;
+    let resolver = build_resolver(validate, server)?;
     let lookup = match dns_timeout(resolver.lookup(name.clone(), RecordType::MX)).await? {
         Ok(lookup) => lookup,
         Err(err) if err.is_no_records_found() => {
@@ -259,7 +264,7 @@ pub async fn warn_if_unsigned(zone: &str) {
         verbose::step("DS lookup skipped: timed out");
         return;
     }
-    let resolver = match build_resolver(false) {
+    let resolver = match build_resolver(false, None) {
         Ok(resolver) => resolver,
         Err(err) => {
             verbose::step(format_args!("DS lookup skipped: {err}"));
@@ -285,8 +290,26 @@ pub async fn warn_if_unsigned(zone: &str) {
     }
 }
 
-fn build_resolver(validate: bool) -> Result<TokioResolver> {
-    let mut builder = Resolver::builder_tokio().context("failed to load system resolver config")?;
+fn build_resolver(validate: bool, server: Option<SocketAddr>) -> Result<TokioResolver> {
+    let mut builder = match server {
+        Some(addr) => {
+            verbose::step(format_args!("DNS server {addr}"));
+            let mut ns = NameServerConfig::udp_and_tcp(addr.ip());
+            for connection in &mut ns.connections {
+                connection.port = addr.port();
+            }
+            let config = ResolverConfig::from_name_servers(vec![ns]);
+            Resolver::builder_with_config(config, TokioRuntimeProvider::default())
+        }
+        None => Resolver::builder_tokio().context("failed to load system resolver config")?,
+    };
+    if server.is_some() {
+        // The caller named the resolver. Do not also consult the hosts file,
+        // and do not let query statistics pick a different server.
+        let opts = builder.options_mut();
+        opts.use_hosts_file = ResolveHosts::Never;
+        opts.server_ordering_strategy = ServerOrderingStrategy::UserProvidedOrder;
+    }
     if validate {
         let opts = builder.options_mut();
         opts.validate = true;
@@ -370,15 +393,27 @@ mod tests {
 
     #[test]
     fn validating_resolver_fits_the_root_dnskey() {
-        let resolver = build_resolver(true).expect("resolver");
+        let resolver = build_resolver(true, None).expect("resolver");
         let opts = resolver.options();
         assert!(opts.validate);
         assert!(opts.edns0);
         assert_eq!(opts.edns_payload_len, 1232);
         assert_eq!(opts.num_concurrent_reqs, 1);
 
-        let plain = build_resolver(false).expect("resolver");
+        let plain = build_resolver(false, None).expect("resolver");
         assert!(!plain.options().validate);
         assert_eq!(plain.options().num_concurrent_reqs, 2);
+
+        let chosen = build_resolver(true, Some("1.1.1.1:53".parse().unwrap())).expect("resolver");
+        let opts = chosen.options();
+        assert!(opts.validate);
+        assert!(opts.edns0);
+        assert_eq!(opts.edns_payload_len, 1232);
+        assert_eq!(opts.num_concurrent_reqs, 1);
+        assert!(matches!(opts.use_hosts_file, ResolveHosts::Never));
+        assert_eq!(
+            opts.server_ordering_strategy,
+            ServerOrderingStrategy::UserProvidedOrder
+        );
     }
 }

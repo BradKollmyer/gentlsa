@@ -155,6 +155,44 @@ pub struct Cli {
     pub command: Command,
 }
 
+/// Dig-style DNS server: `@1.1.1.1`, `@1.1.1.1:53`, `@[2001:db8::1]`, or `@1.1.1.1#53`.
+fn parse_at_server(raw: &str) -> Result<std::net::SocketAddr, String> {
+    let Some(raw) = raw.strip_prefix('@') else {
+        return Err("DNS server must look like @1.1.1.1".into());
+    };
+    if raw.is_empty() {
+        return Err("DNS server must look like @1.1.1.1".into());
+    }
+    let bare = raw
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(raw);
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        return Ok(std::net::SocketAddr::new(ip, 53));
+    }
+    if let Ok(addr) = raw.parse::<std::net::SocketAddr>() {
+        if addr.port() == 0 {
+            return Err("DNS server port must be 1-65535".into());
+        }
+        return Ok(addr);
+    }
+    if let Some((host, port)) = raw.rsplit_once('#') {
+        let ip: std::net::IpAddr = host
+            .parse()
+            .map_err(|_| format!("DNS server must be an IP address like @1.1.1.1, got @{raw}"))?;
+        let port: u16 = port
+            .parse()
+            .map_err(|_| format!("invalid DNS port in @{raw}"))?;
+        if port == 0 {
+            return Err("DNS server port must be 1-65535".into());
+        }
+        return Ok(std::net::SocketAddr::new(ip, port));
+    }
+    Err(format!(
+        "DNS server must be an IP address like @1.1.1.1, got @{raw}"
+    ))
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Generate a TLSA record from a live certificate
@@ -285,6 +323,9 @@ pub enum Command {
         /// Skip DNSSEC validation of the TLSA records (pre-0.5.0 behavior)
         #[arg(long)]
         no_dnssec_check: bool,
+        /// DNS server for the TLSA and MX lookups, in dig syntax (@1.1.1.1). The connection still uses the system resolver
+        #[arg(value_name = "@SERVER", value_parser = parse_at_server)]
+        server: Option<std::net::SocketAddr>,
     },
     /// Cloudflare helpers
     Cloudflare {
@@ -438,6 +479,55 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn clap_verify_at_server() {
+        let cli =
+            Cli::try_parse_from(["gentlsa", "verify", "example.com", "993", "@1.1.1.1"]).unwrap();
+        match cli.command {
+            Command::Verify { server, .. } => {
+                assert_eq!(server, Some("1.1.1.1:53".parse().unwrap()));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["gentlsa", "verify", "example.com", "443", "@8.8.8.8:5353"])
+            .unwrap();
+        match cli.command {
+            Command::Verify { server, .. } => {
+                assert_eq!(server, Some("8.8.8.8:5353".parse().unwrap()));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["gentlsa", "verify", "example.com", "443", "@[2001:db8::1]"])
+                .unwrap();
+        match cli.command {
+            Command::Verify { server, .. } => {
+                assert_eq!(server, Some("[2001:db8::1]:53".parse().unwrap()));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let cli = Cli::try_parse_from(["gentlsa", "verify", "example.com", "443", "@1.1.1.1#5353"])
+            .unwrap();
+        match cli.command {
+            Command::Verify { server, .. } => {
+                assert_eq!(server, Some("1.1.1.1:5353".parse().unwrap()));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        assert!(Cli::try_parse_from(["gentlsa", "verify", "example.com", "443"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["gentlsa", "verify", "example.com", "443", "@dns.google"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["gentlsa", "verify", "example.com", "443", "1.1.1.1"]).is_err()
+        );
     }
 
     #[test]

@@ -163,6 +163,7 @@ none\:"Implicit TLS; skip STARTTLS even on ports that default to it"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':zone:_default' \
 ':ports -- Service port or comma-separated list (for example 443 or 25,465):_default' \
+'::server -- DNS server for the TLSA and MX lookups, in dig syntax (@1.1.1.1). The connection still uses the system resolver:_default' \
 && ret=0
 ;;
 (cloudflare)

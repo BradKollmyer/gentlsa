@@ -78,7 +78,7 @@ async fn run() -> Result<u8> {
             require_default_params_for_publish(params, &publisher)?;
             let starttls = starttls.proto();
             let mx = mx.mx;
-            let targets = match resolve_targets(&zone, hostname.as_deref(), mx, true).await {
+            let targets = match resolve_targets(&zone, hostname.as_deref(), mx, true, None).await {
                 Ok(targets) => targets,
                 Err(err) => {
                     eprintln!("{err:#}");
@@ -150,7 +150,7 @@ async fn run() -> Result<u8> {
             let starttls = starttls.proto();
             let mx = mx.mx;
             let publisher_kind = publisher.kind();
-            let targets = match resolve_targets(&zone, hostname.as_deref(), mx, true).await {
+            let targets = match resolve_targets(&zone, hostname.as_deref(), mx, true, None).await {
                 Ok(targets) => targets,
                 Err(err) => {
                     eprintln!("{err:#}");
@@ -253,6 +253,7 @@ async fn run() -> Result<u8> {
             critical,
             no_expiry_check,
             no_dnssec_check,
+            server,
         } => {
             if critical > warn {
                 output::text(format!(
@@ -273,7 +274,9 @@ async fn run() -> Result<u8> {
             let starttls = starttls.proto();
             let mx = mx.mx;
             let targets =
-                match resolve_targets(&zone, hostname.as_deref(), mx, !no_dnssec_check).await {
+                match resolve_targets(&zone, hostname.as_deref(), mx, !no_dnssec_check, server)
+                    .await
+                {
                     Ok(targets) => targets,
                     Err(err) => {
                         eprintln!("{err:#}");
@@ -316,6 +319,7 @@ async fn run() -> Result<u8> {
                             starttls,
                             mx.then(|| target.connect_host()),
                             mx_dnssec,
+                            server,
                         )
                         .await,
                     );
@@ -445,6 +449,7 @@ async fn resolve_targets(
     hostname: Option<&str>,
     mx: bool,
     dnssec_check: bool,
+    server: Option<std::net::SocketAddr>,
 ) -> Result<Targets> {
     if !mx {
         return Ok(Targets {
@@ -452,7 +457,7 @@ async fn resolve_targets(
             mx_dnssec: None,
         });
     }
-    let lookup = dns::lookup_mx(zone, dnssec_check).await?;
+    let lookup = dns::lookup_mx(zone, dnssec_check, server).await?;
     if lookup.hosts.is_empty() {
         anyhow::bail!("no MX records for {zone}");
     }
@@ -1254,7 +1259,7 @@ async fn list(
             let live = port
                 .and_then(|port| live_by_port.get(&port))
                 .map(String::as_str);
-            match dns::lookup_tlsa(name).await {
+            match dns::lookup_tlsa(name, None).await {
                 Ok(records) => dns.push(DnsName {
                     name: name.clone(),
                     records: records
@@ -1582,7 +1587,7 @@ async fn prune(
 
     let name = fqdn(zone_name, port, hostname);
     let mut dns_records = Vec::new();
-    match dns::lookup_tlsa(&name).await {
+    match dns::lookup_tlsa(&name, None).await {
         Ok(records) if records.is_empty() => {
             output::text(format!("DNS: no TLSA records for {name}"));
         }
@@ -1693,6 +1698,7 @@ async fn verify(
     starttls: Option<StarttlsProto>,
     host_label: Option<String>,
     mx_dnssec: Option<dns::DnssecStatus>,
+    server: Option<std::net::SocketAddr>,
 ) -> VerifyResult {
     let say = |msg: &str| {
         if output::is_json() {
@@ -1736,7 +1742,7 @@ async fn verify(
     verbose::step(format_args!("verify {host}:{port}"));
     let name = fqdn(zone, port, hostname);
     let (dns_record, dnssec) = if dnssec_check {
-        match dns::lookup_tlsa_dnssec(&name).await {
+        match dns::lookup_tlsa_dnssec(&name, server).await {
             Ok(lookup) => (lookup.records, lookup.dnssec),
             Err(err) => {
                 eprintln!("{err:#}");
@@ -1744,7 +1750,7 @@ async fn verify(
             }
         }
     } else {
-        match dns::lookup_tlsa(&name).await {
+        match dns::lookup_tlsa(&name, server).await {
             Ok(record) => (record, None),
             Err(err) => {
                 eprintln!("{err:#}");

@@ -83,6 +83,7 @@
 .Op Fl -critical Ar days
 .Op Fl -no-expiry-check
 .Op Fl -no-dnssec-check
+.Op Ar @server
 .Nm
 .Op Fl v
 .Op Fl -json
@@ -450,11 +451,15 @@ skips the expiry check and restores the hash-only verdict.
 A hash mismatch stays ERROR even if the cert is also expiring.
 .Pp
 The TLSA records are also validated with DNSSEC, locally from the root
-trust anchor, through the system resolver.
+trust anchor, through the system resolver, or through
+.Ar @server
+when that is given.
 A DANE client only honors TLSA records that validate as secure, so an
 unauthenticated RRset is WARNING and a bogus one is CRITICAL.
 A resolver that strips DNSSEC records makes every zone look
-unauthenticated; point the system resolver at a full resolver or pass
+unauthenticated; point the system resolver at a full resolver, pass
+.Ar @server ,
+or pass
 .Fl -no-dnssec-check .
 .Bl -tag -width Ds
 .It Fl -hostname Ar name
@@ -486,6 +491,16 @@ and
 .Fl -critical .
 .It Fl -no-dnssec-check
 Skip DNSSEC validation of the TLSA records.
+.It Ar @server
+Query this DNS server for the TLSA and MX lookups instead of the system
+resolvers.
+The address is an IP in dig syntax
+.Pq Sy @1.1.1.1 , @1.1.1.1:53 , or @1.1.1.1#53 .
+The TCP connection still uses the system resolver and hosts file.
+DNSSEC validation still runs locally from the root trust anchor, so the
+server must return DNSSEC records unless
+.Fl -no-dnssec-check
+is set.
 .El
 .Pp
 With a port list, the overall exit is the worst result by Nagios

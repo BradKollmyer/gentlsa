@@ -92,7 +92,7 @@ gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] list <ZONE> [PORTS] [--hos
 gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] prune <ZONE> <PORTS> [--hostname <HOSTNAME>|--mx] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--dryrun]
 gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] rollover <CERTFILE> <ZONE> <PORTS> [--hostname <HOSTNAME>] [--starttls smtp|imap|pop3|xmpp|none] [--cloudflare|--nsupdate|--route53|--google|--azure] [--reload <CMD>] [--ttl <SECONDS>] [--schedule] [--dryrun]
 gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] rollover --resume [JOB]
-gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] verify <ZONE> <PORTS> [--hostname <HOSTNAME>|--mx] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--warn <DAYS>] [--critical <DAYS>] [--no-expiry-check] [--no-dnssec-check]
+gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] verify <ZONE> <PORTS> [--hostname <HOSTNAME>|--mx] [--starttls smtp|imap|pop3|xmpp|none] [--info] [--warn <DAYS>] [--critical <DAYS>] [--no-expiry-check] [--no-dnssec-check] [@SERVER]
 gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] cloudflare [--info] [--listzones]
 gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] nsupdate [--info]
 gentlsa [-v|--verbose] [--json] [--timeout <SECONDS>] route53 [--info] [--listzones]
@@ -215,7 +215,13 @@ $ gentlsa generate example.com 25 --hostname mx --cloudflare --dryrun
 
 Compare every TLSA record in DNS at `_<port>._tcp[.<hostname>].<zone>` with the live certificate chain (Nagios-compatible). Each record is evaluated with its own parameters: usage 1/3 against the leaf, usage 0/2 against every certificate the server presents, selectors 0/1, matching types 0/1/2 (hash presence only — no PKIX or DANE-TA chain validation). A zone that publishes only `2 1 1` therefore verifies correctly. After a hash match, remaining days until `notAfter` are checked against `--warn` (default 14) and `--critical` (default 7). `--critical` cannot be greater than `--warn` (rejected with exit 3, UNKNOWN). `--no-expiry-check` skips the expiry check and restores the hash-only verdict (the pre-0.4.1 exit behavior). A hash mismatch stays `ERROR` even if the cert is also expiring.
 
-The TLSA records are also validated with DNSSEC (locally, from the root trust anchor, through the system resolver). A DANE client only honors TLSA records that validate as secure, so a matching hash in an unsigned zone is `WARNING` — DANE is inert there — and a bogus RRset is `CRITICAL`, because validating resolvers answer SERVFAIL and DANE clients cannot connect at all. `--no-dnssec-check` skips this (the pre-0.5.0 behavior). Note that a resolver that strips DNSSEC records (some home routers) makes every zone look unauthenticated; point `/etc/resolv.conf` at a full resolver or use `--no-dnssec-check`.
+The TLSA records are also validated with DNSSEC (locally, from the root trust anchor, through the system resolver). A DANE client only honors TLSA records that validate as secure, so a matching hash in an unsigned zone is `WARNING` — DANE is inert there — and a bogus RRset is `CRITICAL`, because validating resolvers answer SERVFAIL and DANE clients cannot connect at all. `--no-dnssec-check` skips this (the pre-0.5.0 behavior). Note that a resolver that strips DNSSEC records (some home routers) makes every zone look unauthenticated; point `/etc/resolv.conf` at a full resolver, pass `@SERVER`, or use `--no-dnssec-check`.
+
+`@SERVER` sends the TLSA lookup, and the MX lookup when `--mx` is set, to that DNS server instead of the system resolvers. It is an IP address in dig syntax: `@1.1.1.1`, `@1.1.1.1:53`, or `@1.1.1.1#53`. The TCP connection still uses the system resolver and hosts file, so a split-horizon host can be checked against the public TLSA. DNSSEC validation still runs locally, so the chosen server has to return DNSSEC records.
+
+```
+$ gentlsa verify imap.example.com 993 @1.1.1.1
+```
 
 | Exit | Output | Meaning |
 |------|--------|---------|
