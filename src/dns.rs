@@ -288,7 +288,18 @@ pub async fn warn_if_unsigned(zone: &str) {
 fn build_resolver(validate: bool) -> Result<TokioResolver> {
     let mut builder = Resolver::builder_tokio().context("failed to load system resolver config")?;
     if validate {
-        builder.options_mut().validate = true;
+        let opts = builder.options_mut();
+        opts.validate = true;
+        // resolv.conf leaves EDNS off. The validator then inserts an OPT with a
+        // 512-byte UDP payload. The root DNSKEY RRset does not fit, every
+        // nameserver answers TC, and a second parallel truncated answer makes
+        // Hickory skip the TCP retry. The lookup surfaces as
+        // "DNSSEC validation failed" for a chain that validates.
+        opts.edns0 = true;
+        opts.edns_payload_len = 1232;
+        // One nameserver at a time, so a truncated answer is retried over TCP
+        // and a fast unsigned split-horizon answer cannot outrun the signed one.
+        opts.num_concurrent_reqs = 1;
     }
     if let Ok(left) = timeout::remaining() {
         let opts = builder.options_mut();
@@ -355,5 +366,19 @@ mod tests {
                 (20, "b.example.com"),
             ]
         );
+    }
+
+    #[test]
+    fn validating_resolver_fits_the_root_dnskey() {
+        let resolver = build_resolver(true).expect("resolver");
+        let opts = resolver.options();
+        assert!(opts.validate);
+        assert!(opts.edns0);
+        assert_eq!(opts.edns_payload_len, 1232);
+        assert_eq!(opts.num_concurrent_reqs, 1);
+
+        let plain = build_resolver(false).expect("resolver");
+        assert!(!plain.options().validate);
+        assert_eq!(plain.options().num_concurrent_reqs, 2);
     }
 }

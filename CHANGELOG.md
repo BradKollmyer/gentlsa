@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `verify` DNSSEC checks advertise a 1232-byte EDNS UDP payload and query one nameserver at a time. A resolver list otherwise asked for the root DNSKEY in 512 bytes, got a truncated answer from every server, and reported `DNSSEC validation failed` for a chain that validates
+
 ## 0.5.3 - 2026-10-27
 
 - Upgrade hickory-resolver, hickory-net, and hickory-proto to 0.26.2 (DNSSEC validation, denial-of-service, and parser fixes)
